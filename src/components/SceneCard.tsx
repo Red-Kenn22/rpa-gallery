@@ -28,8 +28,9 @@ function SceneCardImpl({
   const inView = useInView(ref);
   const thumb = useThumbnail(index, scene, files, inView);
   const badge = mediaBadge(scene);
-  const shown = scene.characters.slice(0, 3);
-  const more = scene.characters.length - shown.length;
+  // In folder mode the tag is the top-level folder; skip it when it just repeats the title.
+  const shown = scene.characters.filter((id) => characters.get(id)?.name !== scene.title).slice(0, 3);
+  const more = index.mode === 'folders' ? 0 : scene.characters.length - shown.length;
 
   return (
     <button

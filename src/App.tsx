@@ -5,6 +5,7 @@ import { AlertIcon } from './components/Icons';
 import { IndexingProgress } from './components/IndexingProgress';
 import { SceneGrid } from './components/SceneGrid';
 import { ScenePreviewModal } from './components/ScenePreviewModal';
+import { ScriptsNotice } from './components/ScriptsNotice';
 import { Welcome } from './components/Welcome';
 import { useArchive } from './hooks/useArchive';
 import type { CharacterInfo, GalleryIndex, SceneInfo } from './types';
@@ -76,9 +77,12 @@ export default function App() {
     [state, attachFiles, open],
   );
 
-  const subtitle = index
-    ? `${index.scenes.length} scenes · ${index.characters.length} characters${state.status === 'ready' && state.fromCache ? ' · cached' : ''}`
-    : undefined;
+  const cachedTag = state.status === 'ready' && state.fromCache ? ' · cached' : '';
+  const subtitle = !index
+    ? undefined
+    : index.mode === 'folders'
+      ? `${index.scenes.length} folders · ${(index.stats.images + index.stats.videos).toLocaleString()} files${cachedTag}`
+      : `${index.scenes.length} scenes · ${index.characters.length} characters${cachedTag}`;
 
   return (
     <div className="min-h-dvh">
@@ -90,6 +94,7 @@ export default function App() {
         onFiles={onFiles}
         onHome={state.status === 'ready' || state.status === 'error' ? close : undefined}
         showSearch={!!index}
+        searchPlaceholder={index?.mode === 'folders' ? 'Search folders' : undefined}
       />
 
       {state.status === 'idle' && <Welcome onFiles={onFiles} onOpenCached={openCached} />}
@@ -103,12 +108,14 @@ export default function App() {
               Opened from the cache. Tap <b>Open</b> and select the same files to load thumbnails and media.
             </p>
           )}
+          {index.mode === 'folders' && <ScriptsNotice index={index} onFiles={onFiles} />}
           {index.characters.length > 0 && (
             <CharacterFilterBar characters={index.characters} selected={character} onSelect={setCharacter} total={index.scenes.length} />
           )}
           {index.scenes.length === 0 ? (
             <p className="py-16 text-center text-sm leading-relaxed text-neutral-400">
-              No scenes found. {index.stats.scriptsParsed === 0 && "No game scripts were found. Try selecting all of the game's .rpa files together."}
+              No scenes, images or videos found in these files.{' '}
+              {index.stats.scriptsFound === 0 && "Try selecting all of the game's .rpa files, plus any loose .rpyc files from its game folder."}
             </p>
           ) : (
             <SceneGrid scenes={filtered} index={index} files={files} characters={characters} onOpen={showScene} />

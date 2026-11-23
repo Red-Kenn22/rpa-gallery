@@ -68,16 +68,27 @@ export interface SourceInfo {
 }
 
 export interface IndexStats {
+  /** Script files found in the selection (.rpyc/.rpy, excluding translations). */
+  scriptsFound: number;
   scriptsParsed: number;
   scriptsFailed: number;
   labels: number;
   scenes: number;
   archiveEntries: number;
+  images: number;
+  videos: number;
+  audio: number;
   millis: number;
 }
 
 export interface GalleryIndex {
-  schema: 1;
+  schema: 2;
+  /**
+   * 'scripts' – scenes come from the game's labels.
+   * 'folders' – no scripts were found; scenes are the archive's folders and
+   *             `characters` are its top-level folders.
+   */
+  mode: 'scripts' | 'folders';
   /** Cache key: `${name}_${size}_${lastModified}` per source, sorted, joined by "|". */
   key: string;
   sources: SourceInfo[];

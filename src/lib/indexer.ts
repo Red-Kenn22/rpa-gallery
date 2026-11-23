@@ -12,6 +12,7 @@
 import type { AssetRef, GalleryIndex, IndexProgress, SourceInfo } from '../types';
 import { AstWalker } from './astWalker';
 import { cacheKeyFor } from './cacheKey';
+import { buildFolderGallery } from './folderGallery';
 import { decodeRpyc } from './rpyc';
 import { parseRpy } from './rpyParser';
 import { buildScenes, mediaKind, type AssetLookup } from './sceneParser';
@@ -234,15 +235,31 @@ export async function buildGalleryIndex(files: SourceFile[], hooks: IndexerHooks
     }
   }
   progress({ phase: 'parsing-scripts', done: jobs.length, total: jobs.length });
-  if (!jobs.length) {
-    warn('No Ren\'Py scripts found. They usually live in a separate archive (e.g. scripts.rpa) — select it together with the image archives.');
-  }
+
   if (unknown.size) warn(`Unrecognised AST node types (ignored): ${[...unknown].slice(0, 12).join(', ')}`);
 
   // ── 4. Scenes & characters ──
   checkCancelled();
   progress({ phase: 'building', done: 0, total: 1 });
-  const result = buildScenes(scripts, table);
+  const counts = { images: 0, videos: 0, audio: 0 };
+  for (const p of table.paths()) {
+    const k = mediaKind(p);
+    if (k === 'image') counts.images++;
+    else if (k === 'video') counts.videos++;
+    else if (k === 'audio') counts.audio++;
+  }
+
+  let result: { characters: GalleryIndex['characters']; scenes: GalleryIndex['scenes']; labels: number; referenced: Set<string> } =
+    buildScenes(scripts, table);
+  let mode: GalleryIndex['mode'] = 'scripts';
+  if (!result.scenes.length) {
+    // No usable scripts: fall back to browsing the archive by folder.
+    const folders = buildFolderGallery(table.paths());
+    if (folders.scenes.length) {
+      mode = 'folders';
+      result = { ...folders, labels: result.labels };
+    }
+  }
 
   const assets: Record<string, AssetRef> = Object.create(null);
   for (const path of result.referenced) {
@@ -264,18 +281,21 @@ export async function buildGalleryIndex(files: SourceFile[], hooks: IndexerHooks
   progress({ phase: 'building', done: 1, total: 1 });
 
   return {
-    schema: 1,
+    schema: 2,
+    mode,
     key: cacheKeyFor(files),
     sources,
     characters: result.characters,
     scenes: result.scenes,
     assets,
     stats: {
+      scriptsFound: jobs.length,
       scriptsParsed: scripts.length,
       scriptsFailed,
       labels: result.labels,
       scenes: result.scenes.length,
       archiveEntries,
+      ...counts,
       millis: Date.now() - t0,
     },
     warnings,

@@ -47,8 +47,8 @@ export function Welcome({
         <FolderOpenIcon /> Open archive files
       </FilePickerButton>
       <p className="mt-3 text-center text-xs leading-relaxed text-neutral-500">
-        Tip: select <b className="text-neutral-300">all</b> the game's <code>.rpa</code> files at once. Scripts and images usually live in separate archives.
-        Loose <code>.rpyc</code>/<code>.rpy</code> files work too.
+        Tip: open the game's <code>game</code> folder and select <b className="text-neutral-300">all</b> its <code>.rpa</code> files <b className="text-neutral-300">and</b> any
+        loose <code>.rpyc</code> files. Many games keep their scripts outside the archives.
       </p>
 
       {recent.length > 0 && (

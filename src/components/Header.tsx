@@ -9,6 +9,7 @@ export function Header({
   onFiles,
   onHome,
   showSearch,
+  searchPlaceholder = 'Search scenes or characters',
 }: {
   title: string;
   subtitle?: string;
@@ -17,6 +18,7 @@ export function Header({
   onFiles: (files: File[]) => void;
   onHome?: () => void;
   showSearch: boolean;
+  searchPlaceholder?: string;
 }) {
   return (
     <header className="sticky top-0 z-30 border-b border-white/5 bg-neutral-950/85 pt-[env(safe-area-inset-top)] backdrop-blur-xl">
@@ -48,7 +50,7 @@ export function Header({
               enterKeyHint="search"
               value={query}
               onChange={(e) => onQuery(e.target.value)}
-              placeholder="Search scenes or characters"
+              placeholder={searchPlaceholder}
               className="min-w-0 flex-1 bg-transparent text-[16px] outline-none placeholder:text-neutral-500"
             />
             {query && (

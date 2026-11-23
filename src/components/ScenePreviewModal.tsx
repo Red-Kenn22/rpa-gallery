@@ -101,7 +101,7 @@ export function ScenePreviewModal({
           <div className="min-w-0 flex-1">
             <h2 className="text-base leading-tight font-semibold">{scene.title}</h2>
             <p className="mt-0.5 truncate text-xs text-neutral-400">
-              {scene.id} · {scene.file}:{scene.line}
+              {index.mode === 'folders' ? scene.file : `${scene.id} · ${scene.file}:${scene.line}`}
             </p>
           </div>
           <button type="button" onClick={onClose} className="grid size-8 shrink-0 place-items-center rounded-full bg-white/10" aria-label="Close">
@@ -181,6 +181,11 @@ export function ScenePreviewModal({
           </div>
         )}
 
+        {index.mode === 'folders' ? (
+          <p className="border-t border-white/5 px-4 py-3 text-xs text-neutral-500">
+            Folder view: {scene.images.length} images, {scene.videos.length} videos. Swipe or use the arrows to browse.
+          </p>
+        ) : (
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain border-t border-white/5 px-4 py-3">
           <h3 className="mb-2 text-xs font-semibold tracking-wider text-neutral-500 uppercase">
             Dialogue · {scene.dialogueCount}
@@ -215,6 +220,7 @@ export function ScenePreviewModal({
             </ol>
           )}
         </div>
+        )}
       </div>
     </div>
   );

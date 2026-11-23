@@ -132,6 +132,23 @@ try {
   if (done?.type === 'done') eq('worker result matches', done.index.scenes.map((s) => s.id), index.scenes.map((s) => s.id));
 }
 
+// ── images-only archive (scripts loose elsewhere) → folder mode ──
+{
+  const only = await buildGalleryIndex([sources[1]]);
+  eq('folder mode', only.mode, 'folders');
+  eq('folder stats', [only.stats.scriptsFound, only.stats.images, only.stats.videos, only.stats.audio], [0, 5, 3, 1]);
+  eq('folder scenes', only.scenes.map((s) => [s.id, s.title, s.images.length, s.videos.length]), [
+    ['images', 'Top level', 3, 0],
+    ['images/bg', 'Bg', 1, 0],
+    ['images/sprites', 'Sprites', 1, 0],
+    ['video', 'Video', 0, 3],
+  ]);
+  eq('folder categories', only.characters.map((c) => [c.name, c.sceneCount]), [['Bg', 1], ['Sprites', 1], ['Top level', 1], ['Video', 1]]);
+  eq('folder thumbnail prefers video', only.scenes[3].thumbnail, { path: 'video/ending.webm', kind: 'video' });
+  check('folder assets referenced', Object.keys(only.assets).length === 8);
+  eq('scripts mode stats', [index.mode, index.stats.scriptsFound, index.stats.images], ['scripts', 4, 5]);
+}
+
 // ── unit checks for the source helpers ──
 eq('literal _()', literalValue('_("Lucy")'), 'Lucy');
 eq('literal concat', literalValue(`"a" 'b'`), 'ab');

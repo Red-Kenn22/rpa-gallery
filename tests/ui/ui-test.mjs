@@ -142,6 +142,20 @@ await page.locator('[data-scene="start"]').click();
 check('preview asks for files', (await page.getByRole('dialog').innerText()).includes('Select files'));
 await page.screenshot({ path: join(shots, '7-cache-only.png') });
 
+// ── Images-only archive (scripts kept loose elsewhere): folder mode + guidance ──
+await page.keyboard.press('Escape');
+await page.getByRole('dialog').waitFor({ state: 'detached' });
+await page.locator('input[type=file]').first().setInputFiles([join(fixtures, 'images.rpa')]);
+await page.getByText('No game scripts in images.rpa').waitFor({ timeout: 20000 });
+check('folder mode notice', (await page.locator('main').innerText()).includes('5 images · 3 videos · 1 audio file'));
+check('folder cards', (await cards.count()) === 4, `cards=${await cards.count()}`);
+check('folder subtitle', /4 folders · 8 files/.test(await page.locator('header').innerText()));
+await page.waitForFunction(() => document.querySelectorAll('[data-scene] img').length === 4, null, { timeout: 20000 }).catch(() => {});
+await page.screenshot({ path: join(shots, '8-folder-mode.png') });
+await page.locator('[data-scene="video"]').click();
+check('folder preview has no dialogue list', (await page.getByRole('dialog').innerText()).includes('Folder view: 0 images, 3 videos'));
+await page.keyboard.press('Escape');
+
 check('no console errors', errors.length === 0, errors.join(' | ').slice(0, 400));
 
 await browser.close();

@@ -11,8 +11,9 @@ multi-GB archives never have to fit in memory.
 
 ## Using it
 
-1. Tap **Open** and select **all** of the game's `.rpa` files at once (scripts and images are
-   usually in separate archives). Loose `.rpyc` / `.rpy` files work too.
+1. Tap **Open**, go to the game's `game` folder and select **all** its `.rpa` files **plus any
+   loose `.rpyc` files**. Many games keep their scripts outside the archives. If no scripts are
+   selected, the app still lets you browse the archive's images and videos by folder.
 2. Indexing runs in a background worker; the result is cached in IndexedDB, so reopening the
    same files is instant.
 3. Filter by character, search by scene or character name, tap a scene to watch its video,
