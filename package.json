@@ -1,0 +1,38 @@
+{
+  "name": "rpa-gallery",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Client-side PWA for browsing Ren'Py .rpa archives on a phone",
+  "scripts": {
+    "dev": "vite --host",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "fixtures": "python3 tests/fixtures/gen_fixtures.py tests/fixtures/out && python3 tests/fixtures/gen_phase2.py tests/fixtures/out2",
+    "test:phase1": "python3 tests/fixtures/gen_fixtures.py tests/fixtures/out && tsx tests/verify-phase1.ts tests/fixtures/out",
+    "test:phase2": "python3 tests/fixtures/gen_phase2.py tests/fixtures/out2 && tsx tests/verify-phase2.mts tests/fixtures/out2",
+    "test": "npm run test:phase1 && npm run test:phase2",
+    "bench": "tsx tests/stress2.mts",
+    "test:ui": "python3 tests/fixtures/make_media.py .ui-media && python3 tests/fixtures/gen_phase2.py .ui-fixture --media .ui-media && node tests/ui/build-test.mjs .ui-build && node tests/ui/ui-test.mjs .ui-build .ui-fixture .ui-shots"
+  },
+  "dependencies": {
+    "pako": "^2.1.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.0",
+    "@types/node": "^22.15.0",
+    "@types/pako": "^2.0.3",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "playwright": "^1.50.0",
+    "tailwindcss": "^4.1.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.0",
+    "vite": "^7.0.0",
+    "vite-plugin-pwa": "^1.0.0"
+  }
+}
