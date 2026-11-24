@@ -20,6 +20,15 @@ export interface Layer {
   pos: StagePos | null;
 }
 
+export interface AudioState {
+  files: string[];
+  loop: boolean;
+  /** Changes whenever playback (re)starts, so the UI knows to start it. */
+  seq: number;
+  /** A one-shot that already played at an earlier stop: let it finish, don't restart it. */
+  done?: boolean;
+}
+
 export interface PlayerView {
   bg: Layer | null;
   layers: Layer[];
@@ -30,6 +39,8 @@ export interface PlayerView {
   branch: Extract<Step, { t: 'branch' }>['options'] | null;
   ended: { reason: 'end' | 'left-scene' | 'missing'; nextLabel?: string } | null;
   label: string;
+  /** What each audio channel is playing at this stop. */
+  audio: Record<string, AudioState>;
 }
 
 interface Frame {
@@ -44,6 +55,7 @@ export interface State {
   lines: number;
   /** Text of the previous line, for `extend`. */
   lastSay: { who: string | null; what: string } | null;
+  audioSeq: number;
 }
 
 export interface EngineOptions {
@@ -84,9 +96,10 @@ export class PlayerEngine {
     const entry = sceneLabels[0];
     this.state = {
       stack: [{ label: entry, pc: 0 }],
-      view: { bg: null, layers: [], video: null, say: null, menu: null, branch: null, ended: null, label: entry },
+      view: { bg: null, layers: [], video: null, say: null, menu: null, branch: null, ended: null, label: entry, audio: {} },
       lines: 0,
       lastSay: null,
+      audioSeq: 0,
     };
     this.run();
   }
@@ -162,7 +175,17 @@ export class PlayerEngine {
     if (v.ended || v.menu || v.branch) return;
     v.say = null;
     v.video = null;
+    this.settleAudio();
     this.run();
+  }
+
+  /** Moving on: voice stops (as in Ren'Py); other one-shots finish but never restart. */
+  private settleAudio(): void {
+    const audio = this.state.view.audio;
+    for (const ch of Object.keys(audio)) {
+      if (ch === 'voice') delete audio[ch];
+      else if (!audio[ch].loop) audio[ch] = { ...audio[ch], done: true };
+    }
   }
 
   /** Picks a menu choice or `if` branch by index. */
@@ -177,6 +200,7 @@ export class PlayerEngine {
     v.menu = null;
     v.branch = null;
     v.say = null;
+    this.settleAudio();
     this.run();
   }
 
@@ -319,6 +343,17 @@ export class PlayerEngine {
         case 'set':
           frame.pc++;
           break;
+        case 'audio': {
+          const cur = v.audio[s.ch];
+          if (s.op === 'stop') delete v.audio[s.ch];
+          else if (s.op === 'queue' && cur && !cur.done) {
+            v.audio[s.ch] = { ...cur, files: [...cur.files, ...s.files], loop: s.loop ?? cur.loop };
+          } else if (s.files.length) {
+            v.audio[s.ch] = { files: s.files, loop: s.loop ?? this.programs.channels?.[s.ch] ?? s.ch === 'music', seq: ++st.audioSeq };
+          }
+          frame.pc++;
+          break;
+        }
         case 'jump':
           if (!this.goTo(s.label)) return;
           break;

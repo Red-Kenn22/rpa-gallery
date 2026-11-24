@@ -26,8 +26,11 @@ multi-GB archives never have to fit in memory.
    positions, speaker names, menus as buttons, `if` branches you pick (or auto-pick),
    Back one line, save any frame, and **Continue** into the next scene.
 
-The player is "level 1": it doesn't run the game's Python, play music or render custom
-screens (phone chat UIs and similar).
+Sound is off by default; one tap on **Sound off** enables music (crossfading, restored
+correctly when you scrub or go back), sound effects and voice lines, with a volume slider.
+
+The player is "level 1": it doesn't run the game's Python or render custom screens (phone
+chat UIs and similar), and sounds triggered from those screens aren't played.
 
 ## How it works
 

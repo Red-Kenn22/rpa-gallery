@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useMediaUrls } from '../hooks/useMediaUrls';
+import { usePlayerAudio } from '../hooks/usePlayerAudio';
 import { formatDuration, normalizeHex } from '../lib/format';
 import { mediaKind } from '../lib/media';
 import { PlayerEngine, type Layer } from '../lib/playerEngine';
 import type { GalleryIndex, ScenePrograms, SceneInfo } from '../types';
-import { ChevronLeftIcon, DownloadIcon, ForkNextIcon, ForkPrevIcon, ListIcon, XIcon } from './Icons';
+import { ChevronLeftIcon, DownloadIcon, ForkNextIcon, ForkPrevIcon, ListIcon, SoundOffIcon, SoundOnIcon, XIcon } from './Icons';
 import { ChoiceDetails } from './player/ChoiceDetails';
 import { HistoryPanel } from './player/HistoryPanel';
 import { Scrubber } from './player/Scrubber';
@@ -33,7 +34,9 @@ function StageMedia({
   scale,
   size,
   onSize,
+  muted = true,
 }: {
+  muted?: boolean;
   layer: Layer;
   url: string | undefined;
   stage: Size;
@@ -63,6 +66,9 @@ function StageMedia({
         loop
         playsInline
         muted
+        ref={(el) => {
+          if (el) el.muted = muted; // React doesn't update `muted` reliably
+        }}
         onLoadedMetadata={(e) => onSize({ w: e.currentTarget.videoWidth, h: e.currentTarget.videoHeight })}
       />
     );
@@ -127,6 +133,40 @@ export function ScenePlayer({
   }, [index]);
   const titleForLabel = (label: string) => sceneForLabel(label)?.title;
   const swipe = useRef<{ x: number; y: number; swiped: boolean } | null>(null);
+  // Sound: off by default; one tap enables it and the choice is remembered.
+  const [soundOn, setSoundOn] = useState(() => {
+    try {
+      return localStorage.getItem('rpa.sound') === 'on';
+    } catch {
+      return false;
+    }
+  });
+  const [volume, setVolume] = useState(() => {
+    try {
+      const v = parseFloat(localStorage.getItem('rpa.volume') ?? '');
+      return v >= 0 && v <= 1 ? v : 0.7;
+    } catch {
+      return 0.7;
+    }
+  });
+  const [soundMenu, setSoundMenu] = useState(false);
+  const audioBox = useRef<HTMLDivElement>(null);
+  const setSound = (on: boolean) => {
+    setSoundOn(on);
+    try {
+      localStorage.setItem('rpa.sound', on ? 'on' : 'off');
+    } catch {
+      /* storage unavailable */
+    }
+  };
+  const changeVolume = (v: number) => {
+    setVolume(v);
+    try {
+      localStorage.setItem('rpa.volume', String(v));
+    } catch {
+      /* storage unavailable */
+    }
+  };
 
   const media = useMediaUrls(index, files);
   const root = useRef<HTMLDivElement>(null);
@@ -164,9 +204,12 @@ export function ScenePlayer({
     };
   }, []);
 
-  // Preload what the next taps will show; never evict what's on screen.
-  const onScreen = [v.bg?.img, ...v.layers.map((l) => l.img), v.video?.img];
+  // Preload what the next taps will show; never evict what's on screen (or playing).
+  const playing = Object.values(v.audio).filter((a) => !a.done).flatMap((a) => a.files);
+  const onScreen = [v.bg?.img, ...v.layers.map((l) => l.img), v.video?.img, ...(soundOn ? playing : [])];
   media.setVisible(onScreen);
+  usePlayerAudio({ audio: v.audio, enabled: soundOn, volume, urlFor: (p) => media.url(p), container: audioBox });
+  const musicPlaying = !!v.audio.music && !v.audio.music.done;
   useEffect(() => {
     media.preload(engine.upcoming(3));
   });
@@ -263,16 +306,18 @@ export function ScenePlayer({
       aria-label={`Playing ${scene.title}`}
       data-player
     >
+      <div ref={audioBox} hidden />
+
       {/* Stage */}
       <div
         className="absolute overflow-hidden"
         style={{ width: stage.w * scale, height: stage.h * scale, left: (box.w - stage.w * scale) / 2, top: (box.h - stage.h * scale) / 2 }}
       >
         {v.bg && (
-          <StageMedia layer={{ ...v.bg, pos: v.bg.pos ?? DEFAULT_POS }} url={media.url(v.bg.img)} stage={stage} scale={scale} size={v.bg.img ? sizes[v.bg.img] : undefined} onSize={setSize(v.bg.img ?? '')} />
+          <StageMedia muted={!soundOn || musicPlaying} layer={{ ...v.bg, pos: v.bg.pos ?? DEFAULT_POS }} url={media.url(v.bg.img)} stage={stage} scale={scale} size={v.bg.img ? sizes[v.bg.img] : undefined} onSize={setSize(v.bg.img ?? '')} />
         )}
         {v.layers.map((l) => (
-          <StageMedia key={l.tag} layer={l} url={media.url(l.img)} stage={stage} scale={scale} size={l.img ? sizes[l.img] : undefined} onSize={setSize(l.img ?? '')} />
+          <StageMedia key={l.tag} muted={!soundOn || musicPlaying} layer={l} url={media.url(l.img)} stage={stage} scale={scale} size={l.img ? sizes[l.img] : undefined} onSize={setSize(l.img ?? '')} />
         ))}
         {missingBg && (
           <div className="absolute inset-0 grid place-items-center text-sm text-neutral-500">
@@ -285,7 +330,19 @@ export function ScenePlayer({
       {v.video && (
         <div className="absolute inset-0 grid place-items-center bg-black">
           {media.url(v.video.img) ? (
-            <video key={media.url(v.video.img)} src={media.url(v.video.img)} autoPlay playsInline className="size-full object-contain" onEnded={advance} onError={advance} />
+            <video
+              key={media.url(v.video.img)}
+              src={media.url(v.video.img)}
+              autoPlay
+              playsInline
+              muted={!soundOn}
+              ref={(el) => {
+                if (el) el.muted = !soundOn;
+              }}
+              className="size-full object-contain"
+              onEnded={advance}
+              onError={advance}
+            />
           ) : (
             <span className="text-sm text-neutral-500">{media.failed(v.video.img) || !v.video.img ? `video not found: ${v.video.name}` : 'Loading…'}</span>
           )}
@@ -299,6 +356,44 @@ export function ScenePlayer({
             <XIcon width={18} height={18} />
           </button>
           <p className="min-w-0 flex-1 truncate text-xs font-semibold text-white/90">{scene.title}</p>
+          {soundOn ? (
+            <div className="relative">
+              <button type="button" onClick={() => setSoundMenu((o) => !o)} className="grid size-9 place-items-center rounded-full bg-black/40" aria-label="Sound settings" data-sound="on">
+                <SoundOnIcon width={18} height={18} />
+              </button>
+              {soundMenu && (
+                <div className="absolute top-11 right-0 z-50 w-56 rounded-xl bg-neutral-900/95 p-3 ring-1 ring-white/15" data-sound-menu>
+                  <label className="flex items-center gap-2 text-xs text-neutral-300">
+                    Volume
+                    <input
+                      type="range"
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      value={volume}
+                      onChange={(e) => changeVolume(parseFloat(e.target.value))}
+                      className="flex-1 accent-rose-400"
+                      aria-label="Volume"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSound(false);
+                      setSoundMenu(false);
+                    }}
+                    className="mt-2.5 w-full rounded-lg bg-white/10 py-1.5 text-xs font-medium"
+                  >
+                    Turn sound off
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : (
+            <button type="button" onClick={() => setSound(true)} className="flex items-center gap-1.5 rounded-full bg-white px-3 py-1.5 text-[12px] font-semibold text-neutral-950 active:scale-95" aria-label="Turn sound on" data-sound="off">
+              <SoundOffIcon width={15} height={15} /> Sound off
+            </button>
+          )}
           <button type="button" onClick={toggleAutoBranch} className="rounded-full bg-black/40 px-2.5 py-1.5 text-[11px] font-medium text-white/80" aria-label="Branch mode">
             {autoBranch ? 'Ifs: auto' : 'Ifs: ask'}
           </button>

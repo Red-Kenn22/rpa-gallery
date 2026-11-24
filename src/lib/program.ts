@@ -6,7 +6,7 @@
  */
 
 import type { StagePos, Step, VarChange } from '../types';
-import { findCalls, findStringLiterals, literalValue, stripTextTags } from './pyString';
+import { findCalls, findStringLiterals, literalValue, matchBracket, splitTopLevel, stripTextTags } from './pyString';
 import type { Stmt } from './scriptModel';
 import { mediaKind } from './media';
 import type { Registry } from './sceneParser';
@@ -71,6 +71,23 @@ function pythonSteps(source: string, reg: Registry): Step[] {
   const setStep: Step[] = changes.length ? [{ t: 'set', changes }] : [];
   if (!/renpy\.|Movie/.test(source)) return setStep;
   const events: PyEvent[] = [];
+  for (const c of findCalls(source, /renpy\.(?:music\.(?:play|queue|stop)|sound\.(?:play|queue|stop)|play|voice)/)) {
+    const kw = c.args.keyword;
+    const defCh = c.callee.startsWith('renpy.music') ? 'music' : c.callee === 'renpy.voice' ? 'voice' : 'sound';
+    const ch = literalValue(kw.channel) ?? (c.callee === 'renpy.play' ? literalValue(c.args.positional[1]) : null) ?? defCh;
+    if (ch === 'movie') continue;
+    const op: 'play' | 'queue' | 'stop' = c.callee.endsWith('.stop') ? 'stop' : c.callee.endsWith('.queue') ? 'queue' : 'play';
+    const fade = parseFloat(kw.fadeout ?? '0') || 0;
+    if (op === 'stop') {
+      events.push({ at: c.start, step: { t: 'audio', ch, op, files: [], loop: null, fade } });
+      continue;
+    }
+    const arg = c.args.positional[0] ?? kw.filenames ?? kw.filename ?? '';
+    const exprs = arg.trim().startsWith('[') ? splitTopLevel(arg.trim().slice(1, -1)) : [arg];
+    const files = exprs.map((e) => reg.resolveAudio(e)).filter((f): f is string => !!f);
+    const loop = kw.loop?.trim() === 'True' ? true : kw.loop?.trim() === 'False' ? false : null;
+    if (files.length) events.push({ at: c.start, step: { t: 'audio', ch, op, files, loop, fade } });
+  }
   for (const c of findCalls(source, /renpy\.(?:pause|movie_cutscene|show|scene|jump|call)/)) {
     const arg = literalValue(c.args.positional[0]);
     switch (c.callee) {
@@ -100,8 +117,42 @@ function pythonSteps(source: string, reg: Registry): Step[] {
   return [...setStep, ...events.sort((a, b) => a.at - b.at).map((e) => e.step)];
 }
 
+/** The audio expression of a play/queue/voice statement and its trailing clauses. */
+function splitAudioExpr(rest: string): { exprs: string[]; clauses: string } {
+  const r = rest.trim();
+  if (r.startsWith('[')) {
+    const close = matchBracket(r, 0);
+    const inner = close > 0 ? r.slice(1, close) : r.slice(1);
+    return { exprs: splitTopLevel(inner), clauses: close > 0 ? r.slice(close + 1) : '' };
+  }
+  const lit = findStringLiterals(r)[0];
+  if (lit && lit.start <= 2) return { exprs: [r.slice(0, lit.end)], clauses: r.slice(lit.end) };
+  const tok = /^[\w.]+/.exec(r)?.[0] ?? '';
+  return { exprs: tok ? [tok] : [], clauses: r.slice(tok.length) };
+}
+
+function audioStep(op: 'play' | 'queue' | 'stop', ch: string, exprs: string[], clauses: string, reg: Registry): Step {
+  const files = exprs.map((e) => reg.resolveAudio(e)).filter((f): f is string => !!f);
+  const loop = /\bnoloop\b/.test(clauses) ? false : /\bloop\b/.test(clauses) ? true : null;
+  const fade = parseFloat(/\bfadeout\s+([\d.]+)/.exec(clauses)?.[1] ?? '0') || 0;
+  return { t: 'audio', ch, op, files, loop, fade };
+}
+
 function userSteps(text: string, reg: Registry): Step[] {
   if (/^pause\b/.test(text)) return [{ t: 'pause' }];
+  const voice = /^voice\s+(?!sustain\b)([\s\S]+)$/.exec(text);
+  if (voice) {
+    const { exprs } = splitAudioExpr(voice[1]);
+    return [audioStep('play', 'voice', exprs, 'noloop', reg)];
+  }
+  const audio = /^(play|queue|stop)\s+(\w+)\b\s*([\s\S]*)$/.exec(text);
+  if (audio && audio[2] !== 'movie') {
+    const op = audio[1] as 'play' | 'queue' | 'stop';
+    if (op === 'stop') return [audioStep('stop', audio[2], [], audio[3], reg)];
+    const { exprs, clauses } = splitAudioExpr(audio[3]);
+    const step = audioStep(op, audio[2], exprs, clauses, reg);
+    return (step as { files: string[] }).files.length ? [step] : [];
+  }
   const video = findStringLiterals(text).find((l) => mediaKind(l.value) === 'video');
   if (video && /^(?:play|queue)\s+movie\b|movie/.test(text)) return [{ t: 'video', img: reg.resolveFile(video.value), name: video.value }];
   if (video) return [{ t: 'video', img: reg.resolveFile(video.value), name: video.value }];
@@ -212,5 +263,6 @@ export function compileLabel(body: Stmt[], reg: Registry): Step[] {
 export function programPaths(steps: Step[], into: Set<string>): void {
   for (const s of steps) {
     if ((s.t === 'bg' || s.t === 'show' || s.t === 'video') && s.img) into.add(s.img);
+    else if (s.t === 'audio') s.files.forEach((f) => into.add(f));
   }
 }

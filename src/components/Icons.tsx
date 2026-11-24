@@ -62,3 +62,9 @@ export const ForkPrevIcon = (p: P) => (
 export const ForkNextIcon = (p: P) => (
   <svg {...base(p)}><path d="M13 6l6 6-6 6" /><path d="M7 9l3 3-3 3-3-3z" fill="currentColor" /></svg>
 );
+export const SoundOffIcon = (p: P) => (
+  <svg {...base(p)}><path d="M11 5 6 9H2v6h4l5 4V5z" /><path d="m22 9-6 6M16 9l6 6" /></svg>
+);
+export const SoundOnIcon = (p: P) => (
+  <svg {...base(p)}><path d="M11 5 6 9H2v6h4l5 4V5z" /><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14" /></svg>
+);

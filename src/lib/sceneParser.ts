@@ -118,6 +118,10 @@ function forEachStmt(stmts: Stmt[], fn: (s: Stmt) => void): void {
 export class Registry {
   readonly chars = new Map<string, CharDef>();
   readonly images = new Map<string, ImageAlias>();
+  /** `define audio.theme = "music/theme.ogg"` → theme → music/theme.ogg */
+  readonly audio = new Map<string, string>();
+  /** Channel → loops by default. */
+  readonly channels: Record<string, boolean> = { music: true, sound: false, voice: false, audio: false };
   stage: { w: number; h: number } | null = null;
   private byTag = new Map<string, string[][]>();
   private tagToChar = new Map<string, string>();
@@ -135,6 +139,10 @@ export class Registry {
           if (s.store === 'store' || s.store === 'store.character') {
             const def = parseCharacterExpr(s.source, s.name);
             if (def) this.chars.set(s.name, def);
+          }
+          if (s.store === 'store.audio') {
+            const file = literalValue(s.source);
+            if (file) this.audio.set(s.name, file);
           }
           if (s.store === 'store.config' && (s.name === 'screen_width' || s.name === 'screen_height')) {
             const n = parseInt(s.source, 10);
@@ -172,6 +180,19 @@ export class Registry {
         const name = literalValue(call.args.positional[0]);
         const alias = call.args.positional[1] ? aliasFromSource(call.args.positional[1]) : null;
         if (name && alias) this.images.set(name.toLowerCase(), alias);
+      }
+    }
+    if (source.includes('audio.')) {
+      for (const m of source.matchAll(/(?:^|[\n;])\s*audio\.(\w+)\s*=\s*(["'][^"'\n]+["'])/g)) {
+        const file = literalValue(m[2]);
+        if (file) this.audio.set(m[1], file);
+      }
+    }
+    if (source.includes('register_channel')) {
+      for (const c of findCalls(source, /renpy\.(?:music|audio)\.register_channel/)) {
+        const name = literalValue(c.args.positional[0]);
+        const loop = (c.args.keyword.loop ?? c.args.positional[2] ?? '').trim();
+        if (name) this.channels[name] = loop === 'True';
       }
     }
     const gui = /gui\.init\(\s*(\d+)\s*,\s*(\d+)\s*\)/.exec(source);
@@ -265,6 +286,18 @@ export class Registry {
     if (!alias) return null;
     if ('file' in alias) return this.resolveFile(alias.file);
     return this.resolveImage(alias.ref.split(/\s+/), depth + 1);
+  }
+
+  /** Audio named in a play/queue/voice statement: a file literal or an `audio.` alias. */
+  resolveAudio(expr: string): string | null {
+    const lit = literalValue(expr);
+    if (lit !== null) {
+      const file = lit.replace(/^<[^>]*>/, ''); // "<from 5 to 10>file.ogg"
+      return this.resolveFile(file) ?? (this.audio.has(file) ? this.resolveFile(this.audio.get(file)!) : null);
+    }
+    const name = expr.trim().replace(/^(?:store\.)?audio\./, '');
+    const alias = this.audio.get(name);
+    return alias ? this.resolveFile(alias.replace(/^<[^>]*>/, '')) : null;
   }
 
   /** Image named by `show`/`scene` (name tokens or `expression "..."`). */
@@ -666,7 +699,7 @@ export function buildScenes(files: ScriptFile[], assets: AssetLookup): ScenePars
   scenes.sort((a, b) => labels.get(a.id)!.order - labels.get(b.id)!.order);
 
   // ── Player programs for every label ──
-  const programs: ScenePrograms = { schema: 1, stage: reg.stage, labels: {}, speakers: {} };
+  const programs: ScenePrograms = { schema: 1, stage: reg.stage, labels: {}, speakers: {}, channels: reg.channels };
   const referenced = new Set<string>();
   for (const sc of scenes) {
     sc.images.forEach((p) => referenced.add(p));

@@ -36,7 +36,7 @@ const { index, programs } = await buildGalleryIndex(sources);
 const scene = (id: string) => index.scenes.find((s) => s.id === id) as SceneInfo;
 
 // ── sources & stats ──
-eq('source kinds', index.sources.map((s) => [s.kind, s.version, s.entries]), [['rpa', 'RPA-3.0', 6], ['rpa', 'RPA-3.0', 9]]);
+eq('source kinds', index.sources.map((s) => [s.kind, s.version, s.entries]), [['rpa', 'RPA-3.0', 6], ['rpa', 'RPA-3.0', 11]]);
 eq('cache key', index.key, [...sources].sort((a, b) => a.name.localeCompare(b.name)).map((s) => `${s.name}_${s.size}_1700000000000`).join('|'));
 eq('scripts parsed (tl/ skipped, broken → .rpy)', [index.stats.scriptsParsed, index.stats.scriptsFailed], [4, 0]);
 check('warns about broken.rpyc fallback', index.warnings.some((w) => w.startsWith('broken.rpyc') && w.includes('broken.rpy')));
@@ -90,8 +90,18 @@ const dateSteps = programs!.labels['w1_date'].steps;
 eq('show at left → position', dateSteps.find((s) => s.t === 'show'), { t: 'show', tag: 'eileen', img: 'images/sprites/eileen_happy.png', name: 'eileen happy', pos: [0, 1] });
 eq('call step', dateSteps.find((s) => s.t === 'call'), { t: 'call', label: 'common_phone' });
 const dateMenu = dateSteps.find((s) => s.t === 'menu') as Extract<Step, { t: 'menu' }>;
-eq('menu with condition', [dateMenu.choices.map((c) => [c.text, c.cond, c.to]), dateMenu.exit], [[['Park', null, 5], ['Cafe', 'affection >= 5', 7], ['Go home', null, 9]], 11]);
-eq('set + hide + bg + pause', programs!.labels['w1_date_cafe'].steps.map((s) => s.t), ['set', 'hide', 'bg', 'pause', 'jump']);
+eq('menu with condition', [dateMenu.choices.map((c) => [c.text, c.cond, c.to]), dateMenu.exit], [[['Park', null, 7], ['Cafe', 'affection >= 5', 9], ['Go home', null, 11]], 13]);
+eq('set + hide + bg + sound + pause', programs!.labels['w1_date_cafe'].steps.map((s) => s.t), ['set', 'hide', 'bg', 'audio', 'pause', 'jump']);
+
+// ── audio ──
+const audioSteps = (label: string) => programs!.labels[label].steps.filter((s) => s.t === 'audio');
+eq('play music via audio. alias', audioSteps('w1_date')[0], { t: 'audio', ch: 'music', op: 'play', files: ['audio/theme.ogg'], loop: null, fade: 0 });
+eq('voice line', audioSteps('w1_date')[1], { t: 'audio', ch: 'voice', op: 'play', files: ['voice/e001.ogg'], loop: false, fade: 0 });
+eq('play sound', audioSteps('w1_date_cafe')[0], { t: 'audio', ch: 'sound', op: 'play', files: ['audio/theme.ogg'], loop: null, fade: 0 });
+eq('stop music fadeout', audioSteps('w1_date_part2')[0], { t: 'audio', ch: 'music', op: 'stop', files: [], loop: null, fade: 2 });
+eq('renpy.music.play from Python', audioSteps('w1_night')[0], { t: 'audio', ch: 'music', op: 'play', files: ['audio/night.ogg'], loop: true, fade: 0 });
+eq('channel defaults', [programs!.channels.music, programs!.channels.sound, programs!.channels.voice], [true, false, false]);
+check('audio files referenced', !!index.assets['audio/night.ogg'] && index.assets['voice/e001.ogg']?.mime === 'audio/ogg');
 eq('variable changes parsed', (programs!.labels['w1_date_cafe'].steps[0] as any).changes, [
   { v: 'lucy_love', op: '+=', val: '2' }, { v: 'met_cafe', op: '=', val: 'True' }, { v: 'add_points', op: 'call', val: 'add_points("lucy", 1)' },
 ]);
@@ -127,13 +137,16 @@ eq('rpy dialogue order', extra.dialogue.map((d) => d.what), [
 
 // ── assets: only referenced ones, bytes exact via lazy blobs ──
 const referenced = new Set(index.scenes.flatMap((s) => [...s.images, ...s.videos]));
-for (const lp of Object.values(programs!.labels)) for (const st of lp.steps) if ((st.t === 'bg' || st.t === 'show' || st.t === 'video') && st.img) referenced.add(st.img);
-eq('asset table = scene media + player images', Object.keys(index.assets).sort(), [...referenced].sort());
-check('audio not referenced', !index.assets['audio/theme.ogg']);
+for (const lp of Object.values(programs!.labels)) for (const st of lp.steps) {
+  if ((st.t === 'bg' || st.t === 'show' || st.t === 'video') && st.img) referenced.add(st.img);
+  if (st.t === 'audio') st.files.forEach((f) => referenced.add(f));
+}
+eq('asset table = scene media + player images + audio', Object.keys(index.assets).sort(), [...referenced].sort());
+check('music referenced for the player', !!index.assets['audio/theme.ogg']);
 for (const [path, ref] of Object.entries(index.assets)) {
   const bytes = Buffer.from(await (await loadAssetBlob(sources.map((s) => s.blob), ref)).arrayBuffer()).toString('hex');
   check(`asset bytes ${path}`, bytes === media[path]);
-  check(`asset mime ${path}`, ref.mime === (path.endsWith('.webm') ? 'video/webm' : path.endsWith('.jpg') ? 'image/jpeg' : path.endsWith('.webp') ? 'image/webp' : 'image/png'));
+  check(`asset mime ${path}`, ref.mime === (path.endsWith('.webm') ? 'video/webm' : path.endsWith('.jpg') ? 'image/jpeg' : path.endsWith('.webp') ? 'image/webp' : path.endsWith('.ogg') ? 'audio/ogg' : 'image/png'));
 }
 
 // ── player engine walks a merged scene ──
@@ -196,6 +209,21 @@ for (const [path, ref] of Object.entries(index.assets)) {
   t.jumpTo(tl2.stops.length - 2, tl2);
   eq('jump near the end', t.view.say?.what, 'What a day.');
   eq('previous line kept for menus', (() => { const m = new PlayerEngine(programs!, scene('w1_date').labels); m.advance(); m.advance(); return m.previousLine?.what; })(), 'Your phone buzzes.');
+
+  // audio state through a scene
+  const au = new PlayerEngine(programs!, scene('w1_date').labels);
+  eq('engine audio: music + voice at the first line', [au.view.audio.music?.files, au.view.audio.music?.loop, au.view.audio.voice?.files], [['audio/theme.ogg'], true, ['voice/e001.ogg']]);
+  au.advance();
+  eq('engine audio: voice stops on tap, music continues', [!!au.view.audio.voice, au.view.audio.music?.files], [false, ['audio/theme.ogg']]);
+  au.advance(); au.choose(1);
+  eq('engine audio: sound effect at the image beat', [au.view.audio.sound?.files, au.view.audio.sound?.done], [['audio/theme.ogg'], undefined]);
+  au.advance();
+  eq('engine audio: one-shot marked played, not restarted', au.view.audio.sound?.done, true);
+  au.advance();
+  eq('engine audio: stop music', au.view.audio.music, undefined);
+  const auTl = au.timeline();
+  au.jumpTo(0, auTl);
+  eq('engine audio: jumping back restores music + voice', [au.view.audio.music?.files, au.view.audio.voice?.files], [['audio/theme.ogg'], ['voice/e001.ogg']]);
 
   const auto = new PlayerEngine(programs!, scene('beach').labels, { autoBranch: true });
   auto.advance(); auto.advance(); auto.choose(1); // Leave
@@ -266,7 +294,7 @@ try {
 {
   const only = (await buildGalleryIndex([sources[1]])).index;
   eq('folder mode', only.mode, 'folders');
-  eq('folder stats', [only.stats.scriptsFound, only.stats.images, only.stats.videos, only.stats.audio], [0, 5, 3, 1]);
+  eq('folder stats', [only.stats.scriptsFound, only.stats.images, only.stats.videos, only.stats.audio], [0, 5, 3, 3]);
   eq('folder scenes', only.scenes.map((s) => [s.id, s.title, s.images.length, s.videos.length]), [
     ['images', 'Top level', 3, 0],
     ['images/bg', 'Bg', 1, 0],

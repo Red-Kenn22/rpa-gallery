@@ -36,5 +36,10 @@ def video(p, color, label):
 video('video/intro.webm', 'blue', 'INTRO')
 video('video/ending.webm', 'red', 'ENDING')
 video('video/extra.webm', 'green', 'EXTRA')
-subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1', '-c:a', 'libvorbis', path('audio/theme.ogg')], check=True)
+def tone(p, freq, secs):
+    subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', f'sine=frequency={freq}:duration={secs}', '-c:a', 'libvorbis', path(p)], check=True)
+
+tone('audio/theme.ogg', 440, 4)
+tone('audio/night.ogg', 330, 4)
+tone('voice/e001.ogg', 660, 3)
 print('media written to', OUT)

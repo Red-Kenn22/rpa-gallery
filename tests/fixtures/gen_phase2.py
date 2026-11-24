@@ -93,9 +93,12 @@ script = flat(
     )),
     # ── Split scene: menu branches into labels that rejoin, then an explicit continuation ──
     ast.Init(47, priority=0, block=[ast.Python(47, hide=False, store='store', code=ast.PyCode('gui.init(1280, 720)', 47))]),
+    ast.Init(48, priority=0, block=[ast.Define(48, store='store.audio', varname='theme', operator='=', code=ast.PyCode('"audio/theme.ogg"', 48, 'eval'))]),
     ast.Label(50, name='w1_date', parameters=None, hide=False, block=flat(
         ast.Scene(51, imspec=imspec('bg', 'beach'), layer='master'),
         ast.Show(52, imspec=(('eileen', 'happy'), None, None, [PyExpr('left')], 'master', None, [])),
+        ast.UserStatement(52, line='play music theme fadein 1.0', parsed=None, block=[], subparses=[]),
+        ast.UserStatement(52, line='voice "voice/e001.ogg"', parsed=None, block=[], subparses=[]),
         say(53, 'e', 'Where should we go?'),
         ast.Call(54, label='common_phone', expression=False),
         ast.Menu(55, items=[
@@ -111,14 +114,17 @@ script = flat(
         ast.Python(63, hide=False, store='store', code=ast.PyCode('lucy_love += 2\nmet_cafe = True\nadd_points("lucy", 1)', 63)),
         ast.Hide(64, imspec=(('eileen',), None, None, [], 'master', None, [])),
         ast.Scene(65, imspec=imspec('cg', 'kiss'), layer='master'),
+        ast.UserStatement(65, line='play sound "audio/theme.ogg"', parsed=None, block=[], subparses=[]),
         ast.UserStatement(66, line='pause', parsed=None, block=[], subparses=[]),
         ast.Jump(67, target='w1_date_end', expression=False))),
     ast.Label(68, name='w1_date_end', parameters=None, hide=False, block=flat(
         say(69, None, 'Later...'), ast.Jump(70, target='w1_date_part2', expression=False))),
     ast.Label(71, name='w1_date_part2', parameters=None, hide=False, block=flat(
+        ast.UserStatement(71, line='stop music fadeout 2.0', parsed=None, block=[], subparses=[]),
         say(72, 'e', 'What a day.'), ast.Jump(73, target='w1_night', expression=False))),
     ast.Label(74, name='w1_night', parameters=None, hide=False, block=flat(
         ast.Scene(75, imspec=imspec('sunset'), layer='master'),
+        ast.Python(75, hide=False, store='store', code=ast.PyCode('renpy.music.play("audio/night.ogg", channel="music", loop=True)', 75)),
         ast.Call(76, label='common_phone', expression=False),
         ast.If(77, entries=[('eileen_love >= 1', say(77, 'l', 'You seem happy.')), ('True', say(77, 'l', 'Goodnight.'))]))),
     ast.Label(78, name='common_phone', parameters=None, hide=False, block=flat(
@@ -177,6 +183,8 @@ media = {
     'video/ending.webm': b'\x1aE\xdf\xa3' + b'n' * 200,
     'video/extra.webm': b'\x1aE\xdf\xa3' + b'x' * 150,
     'audio/theme.ogg': b'OggS' + b'a' * 50,
+    'audio/night.ogg': b'OggS' + b'n' * 40,
+    'voice/e001.ogg': b'OggS' + b'v' * 30,
 }
 
 if MEDIA_DIR:  # swap the placeholder bytes for real files (see make_media.py)

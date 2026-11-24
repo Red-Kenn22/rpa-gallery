@@ -275,6 +275,8 @@ class RpyConverter {
       }
       case 'play':
       case 'queue':
+      case 'stop':
+      case 'voice':
         out.push({ k: 'user', text: t, line: l.line });
         return;
       case 'jump':

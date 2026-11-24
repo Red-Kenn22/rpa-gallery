@@ -88,7 +88,7 @@ export interface IndexStats {
 }
 
 export interface GalleryIndex {
-  schema: 3;
+  schema: 4;
   /**
    * 'scripts' – scenes come from the game's labels.
    * 'folders' – no scripts were found; scenes are the archive's folders and
@@ -138,6 +138,8 @@ export type Step =
   | { t: 'menu'; choices: { text: string; cond: string | null; to: number; info?: ChoiceInfo }[]; exit: number }
   /** `if`/`elif`/`else`: the player asks which branch to take (or takes the first). */
   | { t: 'branch'; options: { cond: string; to: number; info?: ChoiceInfo }[]; exit: number }
+  /** Audio on a channel (music, sound, voice, or a custom one). `loop` null = channel default. */
+  | { t: 'audio'; ch: string; op: 'play' | 'queue' | 'stop'; files: string[]; loop: boolean | null; fade: number }
   /** Variable changes from Python (`$ lucy_love += 1`); no-op for the player, used for choice details. */
   | { t: 'set'; changes: VarChange[] }
   | { t: 'goto'; to: number }
@@ -184,4 +186,6 @@ export interface ScenePrograms {
   labels: Record<string, LabelProgram>;
   /** Display names/colours for every speaker id used in programs. */
   speakers: Record<string, { name: string; color?: string }>;
+  /** Whether each audio channel loops by default (music: true; custom channels from register_channel). */
+  channels: Record<string, boolean>;
 }

@@ -352,7 +352,7 @@ export async function buildGalleryIndex(files: SourceFile[], hooks: IndexerHooks
   progress({ phase: 'building', done: 1, total: 1 });
 
   const index: GalleryIndex = {
-    schema: 3,
+    schema: 4,
     mode,
     key: cacheKeyFor(files),
     sources,
