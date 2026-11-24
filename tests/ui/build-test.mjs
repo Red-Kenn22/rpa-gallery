@@ -17,7 +17,7 @@ mkdirSync(join(out, 'workers'), { recursive: true });
 
 const common = {
   bundle: true, format: 'esm', target: 'es2020', sourcemap: 'inline', nodePaths: [join(root, 'node_modules'), ...nodePaths],
-  define: { 'process.env.NODE_ENV': '"development"' }, jsx: 'automatic', loader: { '.css': 'empty' }, logLevel: 'warning',
+  define: { 'process.env.NODE_ENV': '"development"', 'import.meta.env.PROD': 'false' }, jsx: 'automatic', loader: { '.css': 'empty' }, logLevel: 'warning',
 };
 await build({ ...common, entryPoints: [join(root, 'src/main.tsx')], outfile: join(out, 'assets/main.js') });
 await build({ ...common, entryPoints: [join(root, 'src/workers/archive.worker.ts')], outfile: join(out, 'workers/archive.worker.ts') });
@@ -28,7 +28,7 @@ const twDir = dirname(require.resolve('tailwindcss/package.json'));
 const walk = (d) => readdirSync(d).flatMap((n) => (statSync(join(d, n)).isDirectory() ? walk(join(d, n)) : [join(d, n)]));
 const candidates = new Set();
 for (const f of walk(join(root, 'src')).filter((f) => /\.(tsx?|css)$/.test(f))) {
-  for (const tok of readFileSync(f, 'utf8').split(/[\s"'`{}<>;,]+/)) if (tok) candidates.add(tok);
+  for (const tok of readFileSync(f, 'utf8').split(/[\s"'`{}<>;]+/)) if (tok) candidates.add(tok); // commas allowed: max(a,b)
 }
 const compiler = await compile(readFileSync(join(root, 'src/index.css'), 'utf8'), {
   base: join(root, 'src'),

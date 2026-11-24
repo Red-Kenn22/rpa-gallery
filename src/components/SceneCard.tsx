@@ -37,7 +37,7 @@ function SceneCardImpl({
       ref={ref}
       type="button"
       onClick={() => onOpen(scene)}
-      className="group flex flex-col overflow-hidden rounded-2xl bg-white/[0.04] text-left ring-1 ring-white/[0.06] transition active:scale-[0.98] [content-visibility:auto] [contain-intrinsic-size:auto_240px]"
+      className="group flex flex-col overflow-hidden rounded-2xl bg-white/[0.04] text-left ring-1 ring-white/[0.06] transition hover:bg-white/[0.07] hover:ring-white/15 focus-visible:ring-2 focus-visible:ring-rose-400 focus-visible:outline-none active:scale-[0.98] [content-visibility:auto] [contain-intrinsic-size:auto_240px]"
       data-scene={scene.id}
     >
       <div className="relative aspect-[16/10] w-full overflow-hidden bg-neutral-900">
@@ -57,15 +57,15 @@ function SceneCardImpl({
           </div>
         )}
         <span
-          className={`absolute top-2 left-2 flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-bold tracking-wide backdrop-blur ${
-            badge.kind === 'video' ? 'bg-rose-500/90 text-white' : 'bg-black/60 text-white'
+          className={`absolute top-2 left-2 flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-bold tracking-wide ${
+            badge.kind === 'video' ? 'bg-rose-500/95 text-white' : 'bg-black/75 text-white'
           }`}
         >
           {badge.kind === 'video' && <PlayIcon width={9} height={9} />}
           {badge.label}
         </span>
         {scene.durationSec > 0 && (
-          <span className="absolute right-2 bottom-2 flex items-center gap-1 rounded-md bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-neutral-200 backdrop-blur">
+          <span className="absolute right-2 bottom-2 flex items-center gap-1 rounded-md bg-black/75 px-1.5 py-0.5 text-[10px] font-medium text-neutral-200">
             <ClockIcon width={10} height={10} />
             {formatDuration(scene.durationSec)}
           </span>

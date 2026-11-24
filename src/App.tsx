@@ -1,13 +1,15 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { CharacterFilterBar, SortBar, type SortMode } from './components/CharacterFilterBar';
+import { DropOverlay } from './components/DropOverlay';
+import { FilePickerButton } from './components/FilePickerButton';
 import { Header } from './components/Header';
-import { AlertIcon } from './components/Icons';
+import { AlertIcon, FolderOpenIcon } from './components/Icons';
 import { IndexingProgress } from './components/IndexingProgress';
 import { SceneGrid } from './components/SceneGrid';
 import { ScenePlayer } from './components/ScenePlayer';
 import { ScenePreviewModal } from './components/ScenePreviewModal';
-import { FilePickerButton } from './components/FilePickerButton';
 import { MediaNotice, ScriptsNotice } from './components/ScriptsNotice';
+import { UpdateToast } from './components/UpdateToast';
 import { Welcome } from './components/Welcome';
 import { useArchive } from './hooks/useArchive';
 import type { CharacterInfo, GalleryIndex, SceneInfo } from './types';
@@ -20,12 +22,15 @@ function gameTitle(index: GalleryIndex): string {
 export default function App() {
   const { state, open, openCached, attachFiles, cancel, close } = useArchive();
   const [query, setQuery] = useState('');
+  // Typing stays responsive on big games: filtering uses the deferred value.
+  const deferredQuery = useDeferredValue(query);
   const [character, setCharacter] = useState<string | null>(null);
   const [sort, setSort] = useState<SortMode>('story');
   const [openScene, setOpenScene] = useState<SceneInfo | null>(null);
   const [playScene, setPlayScene] = useState<SceneInfo | null>(null);
   /** History entries we pushed for open overlays (sheet, player), so Back closes them. */
   const pushed = useRef(0);
+  const ignorePop = useRef(0);
 
   const index = state.status === 'ready' ? state.index : null;
   const files = state.status === 'ready' ? state.files : null;
@@ -34,8 +39,12 @@ export default function App() {
   useEffect(() => {
     setQuery('');
     setCharacter(null);
+    setSort('story');
     setOpenScene(null);
     setPlayScene(null);
+    // Overlays are gone; forget the history entries we were tracking for them.
+    pushed.current = 0;
+    ignorePop.current = 0;
   }, [index?.key]);
 
   const sceneForLabel = useMemo(() => {
@@ -48,14 +57,14 @@ export default function App() {
 
   const filtered = useMemo(() => {
     if (!index) return [];
-    const q = query.trim().toLowerCase();
+    const q = deferredQuery.trim().toLowerCase();
     return index.scenes.filter((s) => {
       if (character && !s.characters.includes(character)) return false;
       if (!q) return true;
       if (s.title.toLowerCase().includes(q) || s.id.toLowerCase().includes(q)) return true;
       return s.characters.some((id) => (characters.get(id)?.name ?? id).toLowerCase().includes(q));
     });
-  }, [index, query, character, characters]);
+  }, [index, deferredQuery, character, characters]);
 
   const sorted = useMemo(() => {
     if (sort === 'story') return filtered;
@@ -64,7 +73,10 @@ export default function App() {
   }, [filtered, sort]);
 
   // The Android back button / iOS back swipe closes the topmost overlay instead of leaving the app.
-  const ignorePop = useRef(0);
+  const openSceneRef = useRef(openScene);
+  const playSceneRef = useRef(playScene);
+  openSceneRef.current = openScene;
+  playSceneRef.current = playScene;
   const pushOverlay = () => {
     history.pushState({ overlay: true }, '');
     pushed.current++;
@@ -77,23 +89,21 @@ export default function App() {
     }
   };
   const showScene = useCallback((scene: SceneInfo) => {
+    if (!openSceneRef.current) pushOverlay(); // already open: just switch scenes
     setOpenScene(scene);
-    pushOverlay();
   }, []);
   const hideScene = useCallback(() => {
     setOpenScene(null);
     popOverlay();
   }, []);
   const startPlayer = useCallback((scene: SceneInfo) => {
+    if (!playSceneRef.current) pushOverlay();
     setPlayScene(scene);
-    pushOverlay();
   }, []);
   const closePlayer = useCallback(() => {
     setPlayScene(null);
     popOverlay();
   }, []);
-  const playSceneRef = useRef(playScene);
-  playSceneRef.current = playScene;
   useEffect(() => {
     const onPop = () => {
       if (ignorePop.current > 0) {
@@ -130,6 +140,12 @@ export default function App() {
     [state, open],
   );
 
+  const clearFilters = useCallback(() => {
+    setQuery('');
+    setCharacter(null);
+  }, []);
+  const filtersActive = !!query.trim() || character !== null;
+
   const cachedTag = state.status === 'ready' && state.fromCache ? ' · cached' : '';
   const subtitle = !index
     ? undefined
@@ -155,11 +171,18 @@ export default function App() {
       {state.status === 'indexing' && <IndexingProgress progress={state.progress} fileNames={state.fileNames} onCancel={cancel} />}
 
       {index && (
-        <main className="mx-auto max-w-6xl px-4 pb-[calc(2rem+env(safe-area-inset-bottom))]">
+        <main className="mx-auto max-w-6xl pr-[max(1rem,env(safe-area-inset-right))] pb-[calc(2rem+env(safe-area-inset-bottom))] pl-[max(1rem,env(safe-area-inset-left))]">
           {!files && (
-            <p className="mt-3 rounded-xl bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-200 ring-1 ring-amber-500/20">
-              Opened from the cache. Tap <b>Open</b> and select the same files to load thumbnails and media.
-            </p>
+            <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-200 ring-1 ring-amber-500/20">
+              <p className="min-w-0 flex-1">Opened from the cache. Select the same files to load thumbnails and media.</p>
+              <FilePickerButton
+                onFiles={onFiles}
+                label="Select the archive files again"
+                className="flex shrink-0 items-center gap-1.5 rounded-full bg-amber-200 px-3 py-1 text-xs font-semibold text-neutral-950 active:scale-95"
+              >
+                <FolderOpenIcon width={14} height={14} /> Select files
+              </FilePickerButton>
+            </div>
           )}
           {index.mode === 'folders' && files && <ScriptsNotice index={index} onAddFiles={addFiles} />}
           {index.mode === 'scripts' && files && index.stats.images + index.stats.videos === 0 && <MediaNotice index={index} onAddFiles={addFiles} />}
@@ -173,8 +196,19 @@ export default function App() {
             </p>
           ) : (
             <>
-              <SortBar value={sort} onChange={setSort} count={sorted.length} />
-              <SceneGrid scenes={sorted} index={index} files={files} characters={characters} onOpen={showScene} />
+              {index.mode === 'scripts' ? (
+                <SortBar value={sort} onChange={setSort} count={sorted.length} />
+              ) : (
+                <p className="mb-3 text-xs text-neutral-500">{sorted.length.toLocaleString()} shown</p>
+              )}
+              <SceneGrid
+                scenes={sorted}
+                index={index}
+                files={files}
+                characters={characters}
+                onOpen={showScene}
+                onClearFilters={filtersActive ? clearFilters : undefined}
+              />
             </>
           )}
 
@@ -191,17 +225,20 @@ export default function App() {
             </details>
           )}
           {files && (
-            <div className="mt-6 flex justify-center">
+            <div className="mt-6 flex flex-col items-center gap-1.5">
               <FilePickerButton
                 onFiles={addFiles}
                 label="Add more files to this archive"
                 className="rounded-full px-3.5 py-1.5 text-xs text-neutral-300 ring-1 ring-white/15 active:scale-95"
               >
-                + Add more files ({index.sources.map((src) => src.name).join(', ')})
+                + Add more files
               </FilePickerButton>
+              <p className="max-w-full truncate text-[11px] text-neutral-500" title={index.sources.map((src) => src.name).join(', ')}>
+                Loaded: {index.sources.map((src) => src.name).join(', ')}
+              </p>
             </div>
           )}
-          <p className="mt-3 text-center text-[11px] text-neutral-600">
+          <p className="mt-3 text-center text-[11px] text-neutral-400">
             {index.stats.scriptsParsed} scripts · {index.stats.archiveEntries.toLocaleString()} archive files · indexed in{' '}
             {index.stats.millis < 1000 ? `${index.stats.millis} ms` : `${(index.stats.millis / 1000).toFixed(1)} s`}
           </p>
@@ -215,6 +252,7 @@ export default function App() {
           index={index}
           files={files}
           characters={characters}
+          active={!playScene}
           onClose={hideScene}
           onAttachFiles={attachFiles}
           onPlay={() => startPlayer(openScene)}
@@ -245,6 +283,9 @@ export default function App() {
           }}
         />
       )}
+
+      <DropOverlay onFiles={onFiles} disabled={!!playScene} />
+      <UpdateToast />
     </div>
   );
 }

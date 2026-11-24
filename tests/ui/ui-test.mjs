@@ -35,6 +35,8 @@ await context.addInitScript(() => {
   URL.createObjectURL = (b) => { const u = create(b); live.add(u); return u; };
   URL.revokeObjectURL = (u) => { live.delete(u); revoke(u); };
   window.__liveUrls = () => live.size;
+  // Real full screen resizes the headless window mid-test; the feature isn't under test here.
+  Element.prototype.requestFullscreen = () => Promise.reject(new Error('disabled in tests'));
 });
 const page = await context.newPage();
 const errors = [];
@@ -43,6 +45,8 @@ page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
 
 const files = [join(fixtures, 'scripts.rpa'), join(fixtures, 'images.rpa')];
 const cards = page.locator('[data-scene]');
+/** Search results update one render later (useDeferredValue): wait for the grid to settle. */
+const cardsSettle = (n) => page.waitForFunction((want) => document.querySelectorAll('[data-scene]').length === want, n, { timeout: 5000 }).catch(() => {});
 
 // ── Welcome ──
 await page.goto(url);
@@ -87,9 +91,17 @@ await page.getByRole('radio', { name: 'Story order' }).click();
 
 // ── Search ──
 await page.getByPlaceholder('Search scenes or characters').fill('jun');
+await cardsSettle(1);
 check('search by character name', (await cards.count()) === 1 && (await cards.first().getAttribute('data-scene')) === 'chapter_two');
 await page.getByPlaceholder('Search scenes or characters').fill('beach');
+await cardsSettle(1);
 check('search by title', (await cards.count()) === 1, `cards=${await cards.count()}`);
+await page.getByPlaceholder('Search scenes or characters').fill('zzzz');
+await page.getByText('No scenes match.').waitFor();
+await page.getByRole('button', { name: 'Clear filters' }).click();
+await cardsSettle(8);
+check('empty result offers Clear filters', (await cards.count()) === 8, `cards=${await cards.count()}`);
+await page.getByPlaceholder('Search scenes or characters').fill('a');
 await page.getByLabel('Clear search').click();
 
 // ── Preview sheet: video, swipe to images, save ──
@@ -101,6 +113,7 @@ await video.waitFor();
 const canPlay = await video.evaluate((v) => new Promise((r) => (v.readyState >= 1 ? r(true) : (v.onloadedmetadata = () => r(true), v.onerror = () => r(false)))));
 check('video streams from sliced blob', canPlay === true);
 check('dialogue shown', (await dialog.innerText()).includes('Hi') && (await dialog.innerText()).includes('▸ Kiss'));
+check('media index strip', (await dialog.locator('[data-media-strip] [role=tab]').count()) === 5);
 await page.screenshot({ path: join(shots, '4-preview-video.png') });
 
 const [download] = await Promise.all([page.waitForEvent('download'), dialog.getByRole('button', { name: /Save file/ }).click()]);
@@ -132,6 +145,10 @@ check('all object URLs revoked', live === 0, `live=${live}`);
 await page.reload();
 await page.getByText('Recently opened').waitFor();
 await page.screenshot({ path: join(shots, '6-welcome-recent.png') });
+await page.getByRole('button', { name: 'Clear all' }).click();
+check('clear all asks to confirm', (await page.getByRole('button', { name: 'Confirm clear?' }).count()) === 1);
+await page.waitForTimeout(3300);
+check('confirmation resets itself', (await page.getByRole('button', { name: 'Clear all' }).count()) === 1);
 const t1 = Date.now();
 await page.locator('input[type=file]').first().setInputFiles(files);
 await cards.first().waitFor();
@@ -144,6 +161,7 @@ await page.getByText('Recently opened').waitFor();
 await page.locator('main li button').first().click();
 await cards.first().waitFor();
 check('cache-only banner', (await page.getByText('Opened from the cache').count()) === 1);
+check('banner can re-attach files', (await page.getByRole('button', { name: 'Select the archive files again' }).count()) === 1);
 await page.waitForFunction(() => document.querySelectorAll('[data-scene] img').length === 7, null, { timeout: 10000 }).catch(() => {});
 check('thumbnails from IndexedDB without files', (await page.locator('[data-scene] img').count()) === 7);
 await page.locator('[data-scene="start"]').click();
@@ -203,6 +221,17 @@ check('voice line plays', a1.voice?.playing === true, JSON.stringify(a1));
 await tap();
 await page.waitForTimeout(400);
 const a2 = await audioState();
+check('scrubber counter', /^\d+\/\d+$/.test(await player.locator('[data-scrub-counter]').innerText()));
+await player.getByRole('button', { name: 'Sound settings' }).click();
+check('sound menu opens', (await player.locator('[data-sound-menu]').count()) === 1);
+const beforeOutside = await sayText();
+await tap();
+check('outside tap closes the menu without advancing', (await player.locator('[data-sound-menu]').count()) === 0 && (await sayText()) === beforeOutside, String(await sayText()));
+await player.getByRole('button', { name: 'Hide controls' }).click();
+check('hide controls', (await player.getByLabel('Close player').count()) === 0 && (await player.locator('[data-say]').count()) === 0);
+await page.screenshot({ path: join(shots, '9b-player-hud-hidden.png') });
+await tap();
+check('tap brings controls back without advancing', (await player.getByLabel('Close player').count()) === 1 && (await sayText()) === beforeOutside);
 check('voice stops on tap, music continues', a2.voice?.playing === false && a2.music?.playing === true && a2.music.src === a1.music.src, JSON.stringify(a2));
 check('player follows call into shared label', (await sayText()) === 'Your phone buzzes.', String(await sayText()));
 await tapLeftEdge();
@@ -218,6 +247,13 @@ const choiceTexts = await player.locator('[data-choice]').allInnerTexts();
 check('park: rejoins + change + checked later', choiceTexts[0].includes('Rejoins after 1 line') && choiceTexts[0].includes('Eileen love +1') && choiceTexts[0].includes('Eileen love is checked in W 1 Night'), choiceTexts[0]);
 check('cafe: requirement, new image, changes', choiceTexts[1].includes('requires affection >= 5') && choiceTexts[1].includes('Rejoins after 1 image') && choiceTexts[1].includes('1 new image') && choiceTexts[1].includes('Lucy love +2') && choiceTexts[1].includes('add_points("lucy", 1)'), choiceTexts[1]);
 check('go home: continues to another scene', choiceTexts[2].includes('Continues: W 1 Night'), choiceTexts[2]);
+await player.getByRole('button', { name: 'Player settings' }).click();
+await player.locator('[data-settings-menu]').getByRole('button', { name: 'Choice hints' }).click();
+check('choice hints can be turned off', (await player.locator('[data-choice-info]').count()) === 0);
+await player.locator('[data-settings-menu]').getByRole('button', { name: 'Choice hints' }).click();
+await page.keyboard.press('Escape');
+check('Escape closes the settings menu first', (await player.locator('[data-settings-menu]').count()) === 0 && (await player.count()) === 1);
+check('choice hints back on', (await player.locator('[data-choice-info]').count()) === 3);
 await page.screenshot({ path: join(shots, '10-player-menu.png') });
 await player.locator('[data-choice]').nth(1).click();
 await page.waitForTimeout(150);
@@ -249,6 +285,12 @@ if (await player.locator('[data-ended]').count()) await player.locator('[data-en
 await player.getByLabel('Scene log').click();
 await player.locator('[data-history]').waitFor();
 check('log lists the scene', (await player.locator('[data-log-line]').count()) >= 6);
+await page.keyboard.press('Escape');
+check('Escape closes the log before the player', (await player.locator('[data-history]').count()) === 0 && (await player.count()) === 1);
+await player.getByLabel('Scene log').click();
+await player.locator('[data-history-backdrop]').click({ position: { x: 20, y: 200 } });
+check('tapping outside the log closes it', (await player.locator('[data-history]').count()) === 0);
+await player.getByLabel('Scene log').click();
 await page.screenshot({ path: join(shots, '12-player-log.png') });
 await player.locator('[data-log-line]', { hasText: 'What a day.' }).click();
 check('log jump', (await sayText()) === 'What a day.', String(await sayText()));
@@ -286,6 +328,22 @@ await player.waitFor({ state: 'detached' });
 check('back button closes the player first', (await page.getByRole('dialog').count()) === 1);
 await page.keyboard.press('Escape');
 await page.setViewportSize({ width: 390, height: 844 });
+
+// ── Desktop drag-and-drop overlay ──
+await page.evaluate(() => {
+  const dt = new DataTransfer();
+  dt.items.add(new File(['x'], 'dropped.rpa'));
+  window.dispatchEvent(new DragEvent('dragenter', { dataTransfer: dt }));
+});
+await page.locator('[data-drop-overlay]').waitFor({ timeout: 3000 }).catch(() => {});
+check('drop overlay appears while dragging files', (await page.locator('[data-drop-overlay]').count()) === 1);
+await page.evaluate(() => {
+  const dt = new DataTransfer();
+  dt.items.add(new File(['x'], 'dropped.rpa'));
+  window.dispatchEvent(new DragEvent('dragleave', { dataTransfer: dt }));
+});
+await page.locator('[data-drop-overlay]').waitFor({ state: 'detached', timeout: 3000 }).catch(() => {});
+check('drop overlay hides when the drag leaves', (await page.locator('[data-drop-overlay]').count()) === 0);
 
 check('no console errors', errors.length === 0, errors.join(' | ').slice(0, 400));
 

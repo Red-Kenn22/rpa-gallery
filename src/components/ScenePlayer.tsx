@@ -5,7 +5,7 @@ import { formatDuration, normalizeHex } from '../lib/format';
 import { mediaKind } from '../lib/media';
 import { PlayerEngine, type Layer } from '../lib/playerEngine';
 import type { GalleryIndex, ScenePrograms, SceneInfo } from '../types';
-import { ChevronLeftIcon, DownloadIcon, ForkNextIcon, ForkPrevIcon, ListIcon, SoundOffIcon, SoundOnIcon, XIcon } from './Icons';
+import { ChevronLeftIcon, DownloadIcon, EyeOffIcon, ForkNextIcon, ForkPrevIcon, ListIcon, MoreIcon, SoundOffIcon, SoundOnIcon, XIcon } from './Icons';
 import { ChoiceDetails } from './player/ChoiceDetails';
 import { HistoryPanel } from './player/HistoryPanel';
 import { Scrubber } from './player/Scrubber';
@@ -26,13 +26,30 @@ function download(url: string, name: string) {
   a.remove();
 }
 
-/** One image or looping video placed on the stage like Ren'Py does (align within the stage). */
+function placement(size: Size | undefined, pos: [number, number] | null, stage: Size, scale: number): CSSProperties {
+  if (!size) return { position: 'absolute', opacity: 0 };
+  const [xa, ya] = pos ?? DEFAULT_POS;
+  return {
+    position: 'absolute',
+    width: size.w * scale,
+    height: size.h * scale,
+    left: (stage.w - size.w) * xa * scale,
+    top: (stage.h - size.h) * ya * scale,
+    maxWidth: 'none',
+  };
+}
+
+/**
+ * One image or looping video placed on the stage like Ren'Py does (align
+ * within the stage). Images keep the previous picture visible until the next
+ * one has loaded, so changing images never blinks to black.
+ */
 function StageMedia({
   layer,
   url,
   stage,
   scale,
-  size,
+  sizeOf,
   onSize,
   muted = true,
 }: {
@@ -41,27 +58,19 @@ function StageMedia({
   url: string | undefined;
   stage: Size;
   scale: number;
-  size: Size | undefined;
-  onSize: (s: Size) => void;
+  sizeOf: (path: string) => Size | undefined;
+  onSize: (path: string, s: Size) => void;
 }) {
-  if (!url || !layer.img) return null;
-  const [xa, ya] = layer.pos ?? DEFAULT_POS;
-  const style: CSSProperties = size
-    ? {
-        position: 'absolute',
-        width: size.w * scale,
-        height: size.h * scale,
-        left: (stage.w - size.w) * xa * scale,
-        top: (stage.h - size.h) * ya * scale,
-        maxWidth: 'none',
-      }
-    : { position: 'absolute', opacity: 0 };
+  const [shown, setShown] = useState<{ url: string; path: string; pos: [number, number] | null } | null>(null);
+  if (!layer.img) return null;
+
   if (mediaKind(layer.img) === 'video') {
+    if (!url) return null;
     return (
       <video
         key={url}
         src={url}
-        style={style}
+        style={placement(sizeOf(layer.img), layer.pos, stage, scale)}
         autoPlay
         loop
         playsInline
@@ -69,19 +78,32 @@ function StageMedia({
         ref={(el) => {
           if (el) el.muted = muted; // React doesn't update `muted` reliably
         }}
-        onLoadedMetadata={(e) => onSize({ w: e.currentTarget.videoWidth, h: e.currentTarget.videoHeight })}
+        onLoadedMetadata={(e) => onSize(layer.img!, { w: e.currentTarget.videoWidth, h: e.currentTarget.videoHeight })}
       />
     );
   }
+
+  const path = layer.img;
+  const incomingReady = !!url && shown?.url === url;
   return (
-    <img
-      key={url}
-      src={url}
-      alt=""
-      draggable={false}
-      style={style}
-      onLoad={(e) => onSize({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
-    />
+    <>
+      {/* The last fully loaded image stays until the incoming one is ready. */}
+      {shown && !incomingReady && <img src={shown.url} alt="" draggable={false} style={placement(sizeOf(shown.path), shown.pos, stage, scale)} />}
+      {url && (
+        <img
+          key={url}
+          src={url}
+          alt=""
+          draggable={false}
+          style={incomingReady ? placement(sizeOf(path), layer.pos, stage, scale) : { ...placement(sizeOf(path), layer.pos, stage, scale), opacity: 0 }}
+          onLoad={(e) => {
+            onSize(path, { w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight });
+            setShown({ url, path, pos: layer.pos });
+          }}
+          onError={() => setShown(null)}
+        />
+      )}
+    </>
   );
 }
 
@@ -150,6 +172,29 @@ export function ScenePlayer({
     }
   });
   const [soundMenu, setSoundMenu] = useState(false);
+  const [settingsMenu, setSettingsMenu] = useState(false);
+  const [hudHidden, setHudHidden] = useState(false);
+  const [choiceHints, setChoiceHints] = useState(() => {
+    try {
+      return localStorage.getItem('rpa.choiceHints') !== 'off';
+    } catch {
+      return true;
+    }
+  });
+  const toggleChoiceHints = () => {
+    const next = !choiceHints;
+    setChoiceHints(next);
+    try {
+      localStorage.setItem('rpa.choiceHints', next ? 'on' : 'off');
+    } catch {
+      /* storage unavailable */
+    }
+  };
+  const menusOpen = soundMenu || settingsMenu;
+  const closeMenus = () => {
+    setSoundMenu(false);
+    setSettingsMenu(false);
+  };
   const audioBox = useRef<HTMLDivElement>(null);
   const setSound = (on: boolean) => {
     setSoundOn(on);
@@ -245,23 +290,43 @@ export function ScenePlayer({
     return () => clearTimeout(t);
   }, [backHint]);
 
-  /** Tap: left edge = back, anywhere else = next. Swipe right = back. */
+  /**
+   * Tap: left edge = back, anywhere else = next. Swipe right = back.
+   * An open popover closes on an outside tap; hidden controls come back on any tap.
+   */
   const onTap = (e: React.MouseEvent) => {
     if (swipe.current?.swiped) {
       swipe.current = null;
       return;
     }
+    if (menusOpen) return closeMenus();
+    if (hudHidden) return setHudHidden(false);
     if (e.clientX < box.w * BACK_ZONE) back();
     else advance();
   };
 
+  // Latest UI state for the (stable) key handler.
+  const keyState = useRef({ menusOpen, showLog, hudHidden, blocking: false });
+  keyState.current = { menusOpen, showLog, hudHidden, blocking: !!(v.menu || v.branch) };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      const k = keyState.current;
+      if (e.key === 'Escape') {
+        if (k.menusOpen) closeMenus();
+        else if (k.showLog) setShowLog(false);
+        else if (k.hudHidden) setHudHidden(false);
+        else if (!document.fullscreenElement) onClose();
+        return;
+      }
+      // Navigation keys do nothing while a popover, the log, a menu or an if-picker is open.
+      if (k.menusOpen || k.showLog || k.blocking) return;
       if (e.key === ' ' || e.key === 'Enter' || e.key === 'ArrowRight') {
         e.preventDefault();
         advance();
-      } else if (e.key === 'ArrowLeft' || e.key === 'Backspace') back();
-      else if (e.key === 'Escape' && !document.fullscreenElement) onClose();
+      } else if (e.key === 'ArrowLeft' || e.key === 'Backspace') {
+        e.preventDefault();
+        back();
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -283,7 +348,8 @@ export function ScenePlayer({
   const frameImg = v.video?.img ?? [...v.layers].reverse().find((l) => l.img)?.img ?? v.bg?.img;
   const frameUrl = media.url(frameImg);
   const missingBg = v.bg && (!v.bg.img || media.failed(v.bg.img)) ? v.bg.name : null;
-  const setSize = useMemo(() => (path: string) => (s: Size) => setSizes((m) => (m[path] ? m : { ...m, [path]: s })), []);
+  const onSize = useCallback((path: string, sz: Size) => setSizes((m) => (m[path] ? m : { ...m, [path]: sz })), []);
+  const sizeOf = useCallback((path: string) => sizes[path], [sizes]);
   const stop = (e: { stopPropagation: () => void }) => e.stopPropagation();
 
   return (
@@ -294,7 +360,7 @@ export function ScenePlayer({
       onPointerDown={(e) => (swipe.current = { x: e.clientX, y: e.clientY, swiped: false })}
       onPointerUp={(e) => {
         const s0 = swipe.current;
-        if (!s0) return;
+        if (!s0 || menusOpen || hudHidden) return;
         const dx = e.clientX - s0.x;
         const dy = e.clientY - s0.y;
         if (dx > 70 && Math.abs(dy) < 60 && e.pointerType !== 'mouse') {
@@ -314,10 +380,10 @@ export function ScenePlayer({
         style={{ width: stage.w * scale, height: stage.h * scale, left: (box.w - stage.w * scale) / 2, top: (box.h - stage.h * scale) / 2 }}
       >
         {v.bg && (
-          <StageMedia muted={!soundOn || musicPlaying} layer={{ ...v.bg, pos: v.bg.pos ?? DEFAULT_POS }} url={media.url(v.bg.img)} stage={stage} scale={scale} size={v.bg.img ? sizes[v.bg.img] : undefined} onSize={setSize(v.bg.img ?? '')} />
+          <StageMedia key="bg" muted={!soundOn || musicPlaying} layer={{ ...v.bg, pos: v.bg.pos ?? DEFAULT_POS }} url={media.url(v.bg.img)} stage={stage} scale={scale} sizeOf={sizeOf} onSize={onSize} />
         )}
         {v.layers.map((l) => (
-          <StageMedia key={l.tag} muted={!soundOn || musicPlaying} layer={l} url={media.url(l.img)} stage={stage} scale={scale} size={l.img ? sizes[l.img] : undefined} onSize={setSize(l.img ?? '')} />
+          <StageMedia key={`layer:${l.tag}`} muted={!soundOn || musicPlaying} layer={l} url={media.url(l.img)} stage={stage} scale={scale} sizeOf={sizeOf} onSize={onSize} />
         ))}
         {missingBg && (
           <div className="absolute inset-0 grid place-items-center text-sm text-neutral-500">
@@ -350,31 +416,33 @@ export function ScenePlayer({
       )}
 
       {/* Top bar */}
-      <div className="absolute inset-x-0 top-0 z-30 bg-gradient-to-b from-black/75 to-transparent px-3 pt-[max(0.5rem,env(safe-area-inset-top))] pb-5" onClick={stop} onPointerDown={stop} onPointerUp={stop}>
-        <div className="flex items-center gap-2">
-          <button type="button" onClick={onClose} className="grid size-9 place-items-center rounded-full bg-black/40" aria-label="Close player">
+      {!hudHidden && (
+      <div className="absolute inset-x-0 top-0 z-30 bg-gradient-to-b from-black/75 to-transparent pt-[max(0.5rem,env(safe-area-inset-top))] pr-[max(0.75rem,env(safe-area-inset-right))] pb-5 pl-[max(0.75rem,env(safe-area-inset-left))]" onClick={stop} onPointerDown={stop} onPointerUp={stop}>
+        <div className="flex items-center gap-1.5 sm:gap-2">
+          <button type="button" onClick={onClose} className="grid size-9 shrink-0 place-items-center rounded-full bg-black/40" aria-label="Close player">
             <XIcon width={18} height={18} />
           </button>
-          <p className="min-w-0 flex-1 truncate text-xs font-semibold text-white/90">{scene.title}</p>
+          <p className="min-w-[3rem] flex-1 truncate text-xs font-semibold text-white/90">{scene.title}</p>
           {soundOn ? (
-            <div className="relative">
-              <button type="button" onClick={() => setSoundMenu((o) => !o)} className="grid size-9 place-items-center rounded-full bg-black/40" aria-label="Sound settings" data-sound="on">
+            <div className="relative shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setSettingsMenu(false);
+                  setSoundMenu((o) => !o);
+                }}
+                className="grid size-9 place-items-center rounded-full bg-black/40"
+                aria-label="Sound settings"
+                aria-expanded={soundMenu}
+                data-sound="on"
+              >
                 <SoundOnIcon width={18} height={18} />
               </button>
               {soundMenu && (
                 <div className="absolute top-11 right-0 z-50 w-56 rounded-xl bg-neutral-900/95 p-3 ring-1 ring-white/15" data-sound-menu>
                   <label className="flex items-center gap-2 text-xs text-neutral-300">
                     Volume
-                    <input
-                      type="range"
-                      min={0}
-                      max={1}
-                      step={0.05}
-                      value={volume}
-                      onChange={(e) => changeVolume(parseFloat(e.target.value))}
-                      className="flex-1 accent-rose-400"
-                      aria-label="Volume"
-                    />
+                    <input type="range" min={0} max={1} step={0.05} value={volume} onChange={(e) => changeVolume(parseFloat(e.target.value))} className="flex-1 accent-rose-400" aria-label="Volume" />
                   </label>
                   <button
                     type="button"
@@ -390,22 +458,63 @@ export function ScenePlayer({
               )}
             </div>
           ) : (
-            <button type="button" onClick={() => setSound(true)} className="flex items-center gap-1.5 rounded-full bg-white px-3 py-1.5 text-[12px] font-semibold text-neutral-950 active:scale-95" aria-label="Turn sound on" data-sound="off">
-              <SoundOffIcon width={15} height={15} /> Sound off
+            <button
+              type="button"
+              onClick={() => setSound(true)}
+              className="flex shrink-0 items-center gap-1.5 rounded-full bg-white px-2.5 py-1.5 text-[12px] font-semibold text-neutral-950 active:scale-95 sm:px-3"
+              aria-label="Turn sound on"
+              data-sound="off"
+            >
+              <SoundOffIcon width={15} height={15} />
+              <span className="hidden min-[380px]:inline">Sound off</span>
             </button>
           )}
-          <button type="button" onClick={toggleAutoBranch} className="rounded-full bg-black/40 px-2.5 py-1.5 text-[11px] font-medium text-white/80" aria-label="Branch mode">
-            {autoBranch ? 'Ifs: auto' : 'Ifs: ask'}
+          <button type="button" onClick={() => setHudHidden(true)} className="grid size-9 shrink-0 place-items-center rounded-full bg-black/40" aria-label="Hide controls" data-hide-hud>
+            <EyeOffIcon width={17} height={17} />
           </button>
-          {frameUrl && frameImg && (
-            <button type="button" onClick={() => download(frameUrl, frameImg.slice(frameImg.lastIndexOf('/') + 1))} className="grid size-9 place-items-center rounded-full bg-black/40" aria-label="Save this image">
-              <DownloadIcon width={17} height={17} />
-            </button>
-          )}
-          <button type="button" onClick={() => setShowLog(true)} className="grid size-9 place-items-center rounded-full bg-black/40" aria-label="Scene log">
+          <button type="button" onClick={() => setShowLog(true)} className="grid size-9 shrink-0 place-items-center rounded-full bg-black/40" aria-label="Scene log">
             <ListIcon width={17} height={17} />
           </button>
-          <button type="button" onClick={back} disabled={!engine.canGoBack} className="grid size-9 place-items-center rounded-full bg-black/40 disabled:opacity-30" aria-label="Back one line">
+          <div className="relative shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                setSoundMenu(false);
+                setSettingsMenu((o) => !o);
+              }}
+              className="grid size-9 place-items-center rounded-full bg-black/40"
+              aria-label="Player settings"
+              aria-expanded={settingsMenu}
+            >
+              <MoreIcon width={18} height={18} />
+            </button>
+            {settingsMenu && (
+              <div className="absolute top-11 right-0 z-50 w-60 space-y-1 rounded-xl bg-neutral-900/95 p-2 text-sm ring-1 ring-white/15" data-settings-menu>
+                <button type="button" onClick={toggleAutoBranch} className="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left hover:bg-white/5" aria-label="Branch mode">
+                  <span>If-branches</span>
+                  <span className="text-xs text-neutral-400">{autoBranch ? 'auto (first)' : 'ask'}</span>
+                </button>
+                <button type="button" onClick={toggleChoiceHints} className="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left hover:bg-white/5" aria-label="Choice hints" aria-pressed={choiceHints}>
+                  <span>Choice hints</span>
+                  <span className="text-xs text-neutral-400">{choiceHints ? 'on' : 'off'}</span>
+                </button>
+                {frameUrl && frameImg && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      download(frameUrl, frameImg.slice(frameImg.lastIndexOf('/') + 1));
+                      setSettingsMenu(false);
+                    }}
+                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left hover:bg-white/5"
+                    aria-label="Save this image"
+                  >
+                    <DownloadIcon width={15} height={15} /> Save this image
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+          <button type="button" onClick={back} disabled={!engine.canGoBack} className="grid size-9 shrink-0 place-items-center rounded-full bg-black/40 disabled:opacity-30" aria-label="Back one line">
             <ChevronLeftIcon width={18} height={18} />
           </button>
         </div>
@@ -419,16 +528,17 @@ export function ScenePlayer({
           </button>
         </div>
       </div>
+      )}
 
-      {backHint && (
+      {backHint && !hudHidden && (
         <div className="pointer-events-none absolute inset-y-0 left-0 flex w-[22%] items-center justify-center bg-gradient-to-r from-white/15 to-transparent" data-back-hint>
           <span className="rounded-full bg-black/60 px-3 py-1.5 text-center text-[11px] text-white">‹ Tap here to go back</span>
         </div>
       )}
 
       {/* Text box */}
-      {v.say && (
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/70 to-transparent px-5 pt-10 pb-[max(1rem,env(safe-area-inset-bottom))]">
+      {v.say && !hudHidden && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/70 to-transparent pt-10 pr-[max(1.25rem,env(safe-area-inset-right))] pb-[max(1rem,env(safe-area-inset-bottom))] pl-[max(1.25rem,env(safe-area-inset-left))]">
           <div className="mx-auto max-w-3xl">
             {speaker && (
               <p className="mb-1 text-sm font-bold" style={{ color: normalizeHex(speaker.color) ?? '#fda4af' }} data-speaker>
@@ -444,7 +554,7 @@ export function ScenePlayer({
 
       {/* Menu: the question, then each choice with what it leads to */}
       {v.menu && (
-        <div className="absolute inset-0 overflow-y-auto bg-black/55 px-5 pt-24 pb-8" onClick={stop} onPointerDown={stop} onPointerUp={stop}>
+        <div className="absolute inset-0 overflow-y-auto bg-black/55 px-5 pt-[calc(6rem+env(safe-area-inset-top))] pb-8" onClick={stop} onPointerDown={stop} onPointerUp={stop}>
           <div className="mx-auto flex max-w-lg flex-col gap-2.5">
             {engine.previousLine && (
               <div className="rounded-xl bg-black/60 px-4 py-2.5 text-[14px] leading-relaxed ring-1 ring-white/10" data-question>
@@ -460,7 +570,7 @@ export function ScenePlayer({
               <button key={i} type="button" onClick={() => choose(i)} className="w-full rounded-xl bg-neutral-900/90 px-4 py-3 text-left text-[15px] font-medium text-white ring-1 ring-white/15 active:scale-[0.98]" data-choice>
                 {c.text}
                 {c.cond && <span className="mt-0.5 block font-mono text-[11px] text-neutral-400">requires {c.cond}</span>}
-                {c.info && <ChoiceDetails info={c.info} programs={programs} scene={scene} sceneById={sceneById} titleForLabel={titleForLabel} />}
+                {choiceHints && c.info && <ChoiceDetails info={c.info} programs={programs} scene={scene} sceneById={sceneById} titleForLabel={titleForLabel} />}
               </button>
             ))}
           </div>
@@ -469,12 +579,12 @@ export function ScenePlayer({
 
       {/* If-branch picker */}
       {v.branch && (
-        <div className="absolute inset-0 flex flex-col items-center overflow-y-auto bg-black/65 px-5 pt-24 pb-8" onClick={stop} onPointerDown={stop} onPointerUp={stop}>
+        <div className="absolute inset-0 flex flex-col items-center overflow-y-auto bg-black/65 px-5 pt-[calc(6rem+env(safe-area-inset-top))] pb-8" onClick={stop} onPointerDown={stop} onPointerUp={stop}>
           <p className="mb-2.5 text-center text-xs text-neutral-300">The game checks its state here. Which way should it go?</p>
           {v.branch.map((b, i) => (
             <button key={i} type="button" onClick={() => choose(i)} className="mb-2.5 w-full max-w-lg rounded-xl bg-neutral-900/90 px-4 py-2.5 text-left ring-1 ring-sky-400/20 active:scale-[0.98]" data-branch>
               <span className="block font-mono text-[13px] text-sky-200">{b.cond === 'True' ? 'otherwise' : b.cond}</span>
-              {b.info && <ChoiceDetails info={b.info} programs={programs} scene={scene} sceneById={sceneById} titleForLabel={titleForLabel} />}
+              {choiceHints && b.info && <ChoiceDetails info={b.info} programs={programs} scene={scene} sceneById={sceneById} titleForLabel={titleForLabel} />}
             </button>
           ))}
           <button type="button" onClick={() => { toggleAutoBranch(); choose(0); }} className="mt-1 text-xs text-neutral-400 underline underline-offset-2">

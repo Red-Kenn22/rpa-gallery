@@ -26,8 +26,25 @@ export function HistoryPanel({
   }, []);
   const forkAt = new Map(timeline.forks.map((f) => [f.i, f]));
 
+  // Nothing inside the log (taps, swipes) may reach the player underneath.
+  const isolate = {
+    onClick: (e: React.SyntheticEvent) => e.stopPropagation(),
+    onPointerDown: (e: React.SyntheticEvent) => e.stopPropagation(),
+    onPointerUp: (e: React.SyntheticEvent) => e.stopPropagation(),
+  };
   return (
-    <div className="absolute inset-y-0 right-0 z-40 flex w-[min(26rem,92vw)] flex-col bg-neutral-950/95 ring-1 ring-white/10 backdrop-blur" onClick={(e) => e.stopPropagation()} data-history>
+    <>
+    <div
+      className="absolute inset-0 z-40 bg-black/40"
+      {...isolate}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClose();
+      }}
+      aria-hidden="true"
+      data-history-backdrop
+    />
+    <div className="absolute inset-y-0 right-0 z-40 flex w-[min(26rem,92vw)] flex-col bg-neutral-950/95 pr-[env(safe-area-inset-right)] ring-1 ring-white/10 backdrop-blur" {...isolate} data-history>
       <div className="flex items-center justify-between px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-2">
         <p className="text-sm font-semibold">Scene log</p>
         <button type="button" onClick={onClose} className="grid size-8 place-items-center rounded-full bg-white/10" aria-label="Close log">
@@ -71,5 +88,6 @@ export function HistoryPanel({
         {timeline.truncated && <li className="px-3 py-2 text-xs text-neutral-500">… scene continues (log limited)</li>}
       </ol>
     </div>
+    </>
   );
 }

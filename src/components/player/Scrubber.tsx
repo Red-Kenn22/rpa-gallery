@@ -40,16 +40,33 @@ export function Scrubber({
   const shown = drag ?? position;
   const firstAssumed = timeline.forks.find((f) => !f.chosen && f.i >= position)?.i;
 
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    let to: number | null = null;
+    if (e.key === 'ArrowLeft') to = position - 1;
+    else if (e.key === 'ArrowRight') to = position + 1;
+    else if (e.key === 'Home') to = 0;
+    else if (e.key === 'End') to = n - 1;
+    if (to === null) return;
+    // Keep the player's own arrow-key handling (back/next line) out of it.
+    e.preventDefault();
+    e.stopPropagation();
+    to = Math.max(0, Math.min(n - 1, to));
+    if (to !== position) onCommit(to);
+  };
+
   return (
-    <div className="relative min-w-0 flex-1">
+    <div className="relative flex min-w-0 flex-1 items-center gap-2">
       <div
         ref={track}
-        className="relative h-7 cursor-pointer touch-none"
+        className="relative h-7 min-w-0 flex-1 cursor-pointer touch-none rounded focus-visible:ring-2 focus-visible:ring-rose-400 focus-visible:outline-none"
         role="slider"
+        tabIndex={0}
         aria-label="Scene position"
         aria-valuemin={0}
         aria-valuemax={n - 1}
         aria-valuenow={shown}
+        aria-valuetext={`${shown + 1} of ${n}`}
+        onKeyDown={onKeyDown}
         data-scrubber
         onPointerDown={(e) => {
           e.currentTarget.setPointerCapture(e.pointerId);
@@ -82,6 +99,9 @@ export function Scrubber({
         ))}
         <span className="absolute top-1/2 size-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow" style={{ left: `${pct(shown)}%` }} />
       </div>
+      <span className="shrink-0 text-[10px] text-white/70 tabular-nums" data-scrub-counter>
+        {shown + 1}/{n}
+      </span>
       {drag !== null && (
         <div className="pointer-events-none absolute top-8 left-1/2 z-10 w-[min(28rem,80vw)] -translate-x-1/2 rounded-lg bg-neutral-900/95 px-3 py-2 text-xs text-neutral-100 ring-1 ring-white/15" data-scrub-preview>
           <span className="text-neutral-400">

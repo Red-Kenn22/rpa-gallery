@@ -22,8 +22,17 @@ export function Welcome({
   error?: string;
 }) {
   const [recent, setRecent] = useState<CachedIndexSummary[]>([]);
-  const refresh = () => void listCachedIndexes().then(setRecent);
+  const [confirmClear, setConfirmClear] = useState(false);
+  const refresh = () => {
+    void listCachedIndexes().then(setRecent);
+  };
   useEffect(refresh, []);
+  // Two-tap "Clear all": the confirmation resets itself after a few seconds.
+  useEffect(() => {
+    if (!confirmClear) return;
+    const t = setTimeout(() => setConfirmClear(false), 3000);
+    return () => clearTimeout(t);
+  }, [confirmClear]);
 
   return (
     <main className="mx-auto max-w-xl px-5 pt-10 pb-16">
@@ -55,17 +64,25 @@ export function Welcome({
         <section className="mt-10">
           <div className="mb-2 flex items-center justify-between">
             <h2 className="text-xs font-semibold tracking-wider text-neutral-500 uppercase">Recently opened</h2>
-            <button type="button" className="text-xs text-neutral-500 underline-offset-2 hover:underline" onClick={() => void clearCache().then(refresh)}>
-              Clear all
+            <button
+              type="button"
+              className={`text-xs underline-offset-2 hover:underline ${confirmClear ? 'font-semibold text-rose-400' : 'text-neutral-500'}`}
+              onClick={() => {
+                if (!confirmClear) return setConfirmClear(true);
+                setConfirmClear(false);
+                void clearCache().then(refresh);
+              }}
+            >
+              {confirmClear ? 'Confirm clear?' : 'Clear all'}
             </button>
           </div>
           <ul className="divide-y divide-white/5 overflow-hidden rounded-2xl bg-white/[0.04] ring-1 ring-white/5">
             {recent.map((r) => (
               <li key={r.key} className="flex items-center gap-2">
-                <button type="button" className="min-w-0 flex-1 px-4 py-3 text-left" onClick={() => onOpenCached(r.key)}>
+                <button type="button" className="min-w-0 flex-1 px-4 py-3 text-left transition-colors hover:bg-white/[0.04]" onClick={() => onOpenCached(r.key)}>
                   <p className="truncate text-sm font-medium">{r.sources.join(', ')}</p>
                   <p className="text-xs text-neutral-500">
-                    {r.scenes} scenes · {r.characters} characters · {ago(r.savedAt)}
+                    {r.scenes} scenes{r.characters ? ` · ${r.characters} characters` : ''} · {ago(r.savedAt)}
                   </p>
                 </button>
                 <button

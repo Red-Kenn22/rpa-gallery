@@ -10,8 +10,10 @@ export default defineConfig({
     react(),
     tailwindcss(),
     VitePWA({
-      registerType: 'autoUpdate',
-      injectRegister: 'auto',
+      // 'prompt': a new deploy waits for the user to tap Reload (src/lib/swUpdate.ts registers
+      // sw.js itself), so an update never reloads a session and drops its loaded files.
+      registerType: 'prompt',
+      injectRegister: false,
       includeAssets: ['favicon.svg', 'apple-touch-icon.png'],
       manifest: {
         name: 'RPA Gallery',

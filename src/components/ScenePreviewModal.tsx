@@ -22,11 +22,14 @@ export function ScenePreviewModal({
   index,
   files,
   characters,
+  active = true,
   onClose,
   onAttachFiles,
   onPlay,
   playState,
 }: {
+  /** False while the player is open on top: the sheet ignores the keyboard. */
+  active?: boolean;
   scene: SceneInfo;
   index: GalleryIndex;
   files: File[] | null;
@@ -45,7 +48,9 @@ export function ScenePreviewModal({
   const [media, setMedia] = useState<{ path: string; url: string } | null>(null);
   const [mediaError, setMediaError] = useState<string | null>(null);
   const [attachError, setAttachError] = useState(false);
-  const touchX = useRef<number | null>(null);
+  const touch = useRef<{ x: number; y: number } | null>(null);
+  const dismiss = useRef<number | null>(null);
+  const strip = useRef<HTMLDivElement>(null);
   const item = items[i];
 
   // One object URL at a time. The media element only renders while its URL
@@ -74,19 +79,28 @@ export function ScenePreviewModal({
   const go = (d: number) => setI((n) => Math.min(items.length - 1, Math.max(0, n + d)));
 
   useEffect(() => {
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prevOverflow;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!active) return; // the player on top handles keys
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
       else if (e.key === 'ArrowRight') setI((n) => Math.min(items.length - 1, n + 1));
       else if (e.key === 'ArrowLeft') setI((n) => Math.max(0, n - 1));
     };
     window.addEventListener('keydown', onKey);
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      window.removeEventListener('keydown', onKey);
-      document.body.style.overflow = prevOverflow;
-    };
-  }, [onClose, items.length]);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [active, onClose, items.length]);
+
+  // Keep the current item visible in the index strip.
+  useEffect(() => {
+    strip.current?.querySelector<HTMLElement>(`[data-index="${i}"]`)?.scrollIntoView({ block: 'nearest', inline: 'center' });
+  }, [i]);
 
   const canShare = typeof navigator !== 'undefined' && typeof navigator.canShare === 'function';
 
@@ -105,7 +119,15 @@ export function ScenePreviewModal({
     <div className="fixed inset-0 z-50 flex flex-col justify-end" role="dialog" aria-modal="true" aria-label={scene.title}>
       <button type="button" className="absolute inset-0 bg-black/75 backdrop-blur-sm" onClick={onClose} aria-label="Close" />
       <div className="relative mx-auto flex max-h-[94dvh] w-full max-w-3xl animate-[sheet-in_220ms_ease-out] flex-col overflow-hidden rounded-t-3xl bg-neutral-900 pb-[env(safe-area-inset-bottom)] ring-1 ring-white/10 sm:mb-6 sm:rounded-3xl">
-        <div className="mx-auto mt-2 h-1 w-10 rounded-full bg-white/20" />
+        {/* Drag handle + header: swipe down to dismiss (touch) */}
+        <div
+          onTouchStart={(e) => (dismiss.current = e.touches[0].clientY)}
+          onTouchEnd={(e) => {
+            if (dismiss.current !== null && e.changedTouches[0].clientY - dismiss.current > 80) onClose();
+            dismiss.current = null;
+          }}
+        >
+        <div className="mx-auto mt-2 h-1 w-10 rounded-full bg-white/20 sm:hidden" />
         <div className="flex items-start gap-3 px-4 pt-2 pb-3">
           <div className="min-w-0 flex-1">
             <h2 className="text-base leading-tight font-semibold">{scene.title}</h2>
@@ -131,17 +153,21 @@ export function ScenePreviewModal({
             <XIcon width={16} height={16} />
           </button>
         </div>
+        </div>
 
         {items.length > 0 && (
           <div className="shrink-0">
             <div
-              className="relative grid aspect-video w-full place-items-center bg-black"
-              onTouchStart={(e) => (touchX.current = e.touches[0].clientX)}
+              className="relative grid aspect-video max-h-[45dvh] w-full place-items-center bg-black"
+              onTouchStart={(e) => (touch.current = { x: e.touches[0].clientX, y: e.touches[0].clientY })}
               onTouchEnd={(e) => {
-                if (touchX.current === null) return;
-                const dx = e.changedTouches[0].clientX - touchX.current;
-                touchX.current = null;
-                if (Math.abs(dx) > 50 && item?.kind !== 'video') go(dx < 0 ? 1 : -1);
+                const t0 = touch.current;
+                touch.current = null;
+                if (!t0) return;
+                const dx = e.changedTouches[0].clientX - t0.x;
+                const dy = e.changedTouches[0].clientY - t0.y;
+                // Horizontal swipes only, so scrolling the sheet doesn't flip images.
+                if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5 && item?.kind !== 'video') go(dx < 0 ? 1 : -1);
               }}
             >
               {!files ? (
@@ -169,7 +195,9 @@ export function ScenePreviewModal({
                 />
               ) : url ? (
                 <img key={url} src={url} alt={baseName(item!.path)} className="size-full object-contain" draggable={false} />
-              ) : null}
+              ) : (
+                <span className="size-6 animate-spin rounded-full border-2 border-neutral-600 border-t-transparent" aria-label="Loading" role="status" />
+              )}
 
               {items.length > 1 && (
                 <>
@@ -182,6 +210,28 @@ export function ScenePreviewModal({
                 </>
               )}
             </div>
+
+            {items.length > 1 && (
+              <div ref={strip} className="no-scrollbar flex gap-1 overflow-x-auto px-4 pt-2" role="tablist" aria-label="Scene media" data-media-strip>
+                {items.map((it, n) => (
+                  <button
+                    key={it.path}
+                    type="button"
+                    role="tab"
+                    aria-selected={n === i}
+                    aria-label={`${it.kind === 'video' ? 'Video' : 'Image'} ${n + 1}`}
+                    data-index={n}
+                    onClick={() => setI(n)}
+                    className={`flex h-6 min-w-6 shrink-0 items-center justify-center gap-0.5 rounded px-1.5 text-[10px] font-medium tabular-nums ${
+                      n === i ? 'bg-white text-neutral-950' : it.kind === 'video' ? 'bg-rose-500/20 text-rose-200' : 'bg-white/10 text-neutral-300'
+                    }`}
+                  >
+                    {it.kind === 'video' && '▶'}
+                    {n + 1}
+                  </button>
+                ))}
+              </div>
+            )}
 
             <div className="flex items-center gap-2 px-4 py-2.5">
               <div className="min-w-0 flex-1">
