@@ -101,11 +101,14 @@ script = flat(
         ast.Menu(55, items=[
             ('Park', 'True', [ast.Jump(56, target='w1_date_park', expression=False)]),
             ('Cafe', 'affection >= 5', [ast.Jump(57, target='w1_date_cafe', expression=False)]),
+            ('Go home', 'True', [ast.Jump(58, target='w1_night', expression=False)]),
         ]),
     )),
     ast.Label(60, name='w1_date_park', parameters=None, hide=False, block=flat(
+        ast.Python(60, hide=False, store='store', code=ast.PyCode('eileen_love += 1', 60)),
         say(61, 'e', 'The park is lovely.'), ast.Jump(62, target='w1_date_end', expression=False))),
     ast.Label(63, name='w1_date_cafe', parameters=None, hide=False, block=flat(
+        ast.Python(63, hide=False, store='store', code=ast.PyCode('lucy_love += 2\nmet_cafe = True\nadd_points("lucy", 1)', 63)),
         ast.Hide(64, imspec=(('eileen',), None, None, [], 'master', None, [])),
         ast.Scene(65, imspec=imspec('cg', 'kiss'), layer='master'),
         ast.UserStatement(66, line='pause', parsed=None, block=[], subparses=[]),
@@ -117,7 +120,7 @@ script = flat(
     ast.Label(74, name='w1_night', parameters=None, hide=False, block=flat(
         ast.Scene(75, imspec=imspec('sunset'), layer='master'),
         ast.Call(76, label='common_phone', expression=False),
-        say(77, 'l', 'Goodnight.'))),
+        ast.If(77, entries=[('eileen_love >= 1', say(77, 'l', 'You seem happy.')), ('True', say(77, 'l', 'Goodnight.'))]))),
     ast.Label(78, name='common_phone', parameters=None, hide=False, block=flat(
         say(79, None, 'Your phone buzzes.'), ast.Return(80, expression=None))),
     ast.Label(40, name='_private', parameters=None, hide=False, block=say(41, None, 'hidden')),

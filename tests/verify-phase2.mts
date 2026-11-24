@@ -13,7 +13,7 @@ import { parseRpy } from '../src/lib/rpyParser.ts';
 import { PlayerEngine } from '../src/lib/playerEngine.ts';
 import { findCalls, literalValue, splitTopLevel } from '../src/lib/pyString.ts';
 import { formatTitle } from '../src/lib/sceneParser.ts';
-import type { GalleryIndex, SceneInfo } from '../src/types.ts';
+import type { GalleryIndex, SceneInfo, Step } from '../src/types.ts';
 import type { WorkerResponse } from '../src/workers/protocol.ts';
 
 const dir = process.argv[2] ?? 'tests/fixtures/out2';
@@ -89,8 +89,23 @@ eq('stage from gui.init', programs?.stage, { w: 1280, h: 720 });
 const dateSteps = programs!.labels['w1_date'].steps;
 eq('show at left → position', dateSteps.find((s) => s.t === 'show'), { t: 'show', tag: 'eileen', img: 'images/sprites/eileen_happy.png', name: 'eileen happy', pos: [0, 1] });
 eq('call step', dateSteps.find((s) => s.t === 'call'), { t: 'call', label: 'common_phone' });
-eq('menu with condition', dateSteps.find((s) => s.t === 'menu'), { t: 'menu', choices: [{ text: 'Park', cond: null, to: 5 }, { text: 'Cafe', cond: 'affection >= 5', to: 7 }] });
-eq('hide + bg + pause', programs!.labels['w1_date_cafe'].steps.map((s) => s.t), ['hide', 'bg', 'pause', 'jump']);
+const dateMenu = dateSteps.find((s) => s.t === 'menu') as Extract<Step, { t: 'menu' }>;
+eq('menu with condition', [dateMenu.choices.map((c) => [c.text, c.cond, c.to]), dateMenu.exit], [[['Park', null, 5], ['Cafe', 'affection >= 5', 7], ['Go home', null, 9]], 11]);
+eq('set + hide + bg + pause', programs!.labels['w1_date_cafe'].steps.map((s) => s.t), ['set', 'hide', 'bg', 'pause', 'jump']);
+eq('variable changes parsed', (programs!.labels['w1_date_cafe'].steps[0] as any).changes, [
+  { v: 'lucy_love', op: '+=', val: '2' }, { v: 'met_cafe', op: '=', val: 'True' }, { v: 'add_points', op: 'call', val: 'add_points("lucy", 1)' },
+]);
+
+// ── choice consequences ──
+const [park, cafe, home] = dateMenu.choices.map((c) => c.info!);
+eq('park: rejoins, 1 line, changes', [park.dest, park.lines, park.changes], [{ k: 'rejoin' }, 1, [{ v: 'eileen_love', op: '+=', val: '1' }]]);
+eq('park: change checked later', park.usedIn, [{ v: 'eileen_love', scenes: ['w1_night'], total: 1 }]);
+eq('cafe: new image only on this choice', [cafe.images, cafe.uniqueImages, cafe.dest], [1, 1, { k: 'rejoin' }]);
+eq('cafe: three changes, none checked', [cafe.changes.length, cafe.usedIn], [3, []]);
+eq('go home: leaves the scene', home.dest, { k: 'leaves', label: 'w1_night' });
+const nightBranch = programs!.labels['w1_night'].steps.find((s) => s.t === 'branch') as Extract<Step, { t: 'branch' }>;
+eq('if depends on a choice', nightBranch.options[0].info?.deps, [{ v: 'eileen_love', setBy: [{ scene: 'w1_date', choice: 'Park', change: '+1' }] }]);
+eq('beach menu: kiss has the cg, leave has nothing new', (programs!.labels['beach'].steps[4] as any).choices.map((c: any) => [c.info.uniqueImages, c.info.lines]), [[1, 1], [0, 0]]);
 eq('return step', programs!.labels['common_phone'].steps.at(-1), { t: 'return' });
 eq('fall-through target', programs!.labels['beach.local'].next, 'w1_date');
 eq('extend step', programs!.labels['beach'].steps[3], { t: 'say', who: 'l', what: ' more', extend: true });
@@ -155,7 +170,7 @@ for (const [path, ref] of Object.entries(index.assets)) {
   d.advance();
   eq('engine: call into shared label', [d.view.label, say(d)], ['common_phone', 'Your phone buzzes.']);
   d.advance();
-  eq('engine: returns to the menu', d.view.menu?.map((c) => [c.text, c.cond]), [['Park', null], ['Cafe', 'affection >= 5']]);
+  eq('engine: returns to the menu', d.view.menu?.map((c) => [c.text, c.cond]), [['Park', null], ['Cafe', 'affection >= 5'], ['Go home', null]]);
   d.choose(1);
   eq('engine: hide + scene + pause (image-only beat)', [d.view.bg?.img, d.view.layers.length, d.view.say], ['images/cg_kiss.jpg', 0, null]);
   d.advance();
@@ -164,6 +179,24 @@ for (const [path, ref] of Object.entries(index.assets)) {
   eq('engine: continuation label', [d.view.label, say(d)], ['w1_date_part2', 'What a day.']);
   d.advance();
   eq('engine: linear jump ends the scene', d.view.ended, { reason: 'left-scene', nextLabel: 'w1_night' });
+  // timeline: previous choice, else first
+  const t = new PlayerEngine(programs!, scene('w1_date').labels);
+  const tl1 = t.timeline();
+  eq('timeline: fork at the menu, assumed', tl1.forks.map((f) => [f.i, f.chosen, f.kind]), [[2, false, 'menu']]);
+  eq('timeline: assumed path takes the first choice', tl1.stops[3].view.say?.what, 'The park is lovely.');
+  eq('timeline: ends where the scene does', tl1.stops.at(-1)?.view.ended, { reason: 'left-scene', nextLabel: 'w1_night' });
+  t.advance(); t.advance(); t.choose(1);
+  const tl2 = t.timeline();
+  eq('timeline: remembers your choice', [tl2.forks[0].chosen, tl2.stops[3].view.bg?.img], [true, 'images/cg_kiss.jpg']);
+  eq('timeline: position matches', [t.position, tl2.stops[t.position].view.bg?.img], [3, 'images/cg_kiss.jpg']);
+  t.jumpTo(1, tl2);
+  eq('jumpTo a stop', t.view.say?.what, 'Your phone buzzes.');
+  t.back();
+  eq('back after jumpTo', t.view.say?.what, 'Where should we go?');
+  t.jumpTo(tl2.stops.length - 2, tl2);
+  eq('jump near the end', t.view.say?.what, 'What a day.');
+  eq('previous line kept for menus', (() => { const m = new PlayerEngine(programs!, scene('w1_date').labels); m.advance(); m.advance(); return m.previousLine?.what; })(), 'Your phone buzzes.');
+
   const auto = new PlayerEngine(programs!, scene('beach').labels, { autoBranch: true });
   auto.advance(); auto.advance(); auto.choose(1); // Leave
   eq('engine: autoBranch takes the first branch', [auto.view.bg?.name, auto.view.video?.img, auto.view.branch], ['bg night', 'video/ending.webm', null]);

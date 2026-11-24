@@ -7,9 +7,11 @@
  *   – follows jumps inside the scene, calls/returns anywhere, fall-through
  *   – leaving the scene's labels ends playback and names the next label
  *   – every stop is snapshotted, so Back is exact
+ *   – choices are remembered per fork, and `timeline()` simulates the whole
+ *     scene (previous choice at each fork, else the first) for the scrubber
  */
 
-import type { ScenePrograms, StagePos } from '../types';
+import type { ScenePrograms, StagePos, Step } from '../types';
 
 export interface Layer {
   tag: string;
@@ -24,8 +26,8 @@ export interface PlayerView {
   /** A one-shot cutscene playing full screen. */
   video: { img: string | null; name: string } | null;
   say: { who: string | null; what: string } | null;
-  menu: { text: string; cond: string | null; to: number }[] | null;
-  branch: { cond: string; to: number }[] | null;
+  menu: Extract<Step, { t: 'menu' }>['choices'] | null;
+  branch: Extract<Step, { t: 'branch' }>['options'] | null;
   ended: { reason: 'end' | 'left-scene' | 'missing'; nextLabel?: string } | null;
   label: string;
 }
@@ -35,7 +37,7 @@ interface Frame {
   pc: number;
 }
 
-interface State {
+export interface State {
   stack: Frame[];
   view: PlayerView;
   /** Dialogue lines shown so far (for the progress bar). */
@@ -49,6 +51,16 @@ export interface EngineOptions {
   autoBranch?: boolean;
 }
 
+export interface Timeline {
+  /** Snapshot at every stop along the path. */
+  stops: State[];
+  /** Stops that are menus/if-branches; `chosen` = you picked it (else assumed). */
+  forks: { i: number; chosen: boolean; kind: 'menu' | 'branch' }[];
+  /** Simulation stopped early (very long scene). */
+  truncated: boolean;
+}
+
+const MAX_HISTORY = 6000;
 const MAX_STEPS_PER_ADVANCE = 20000;
 const MAX_CALL_DEPTH = 64;
 
@@ -59,10 +71,14 @@ export class PlayerEngine {
   private history: State[] = [];
   private readonly programs: ScenePrograms;
   private readonly members: Set<string>;
+  private readonly sceneLabels: string[];
+  /** Remembered choices: fork key (`label:pc`) → option index. */
+  readonly choices = new Map<string, number>();
   options: EngineOptions;
 
   constructor(programs: ScenePrograms, sceneLabels: string[], options: EngineOptions = {}) {
     this.programs = programs;
+    this.sceneLabels = sceneLabels;
     this.members = new Set(sceneLabels);
     this.options = options;
     const entry = sceneLabels[0];
@@ -87,6 +103,59 @@ export class PlayerEngine {
     return this.history.length > 1;
   }
 
+  /** Index of the current stop (matches `timeline().stops` while you follow it). */
+  get position(): number {
+    return this.history.length - 1;
+  }
+
+  /** Snapshots of every stop so far (for the history log). */
+  get past(): readonly State[] {
+    return this.history;
+  }
+
+  /** The text shown before the current stop (a menu's question). */
+  get previousLine(): { who: string | null; what: string } | null {
+    return this.state.lastSay;
+  }
+
+  /** Key of the fork the player is waiting on, if any. */
+  forkKey(): string | null {
+    const v = this.state.view;
+    if (!v.menu && !v.branch) return null;
+    const f = this.top();
+    return `${f.label}:${f.pc}`;
+  }
+
+  /** Simulates the scene from the start: remembered choice at each fork, else the first option. */
+  timeline(maxStops = 4000): Timeline {
+    const sim = new PlayerEngine(this.programs, this.sceneLabels, { ...this.options });
+    const forks: Timeline['forks'] = [];
+    while (!sim.view.ended && sim.history.length < maxStops) {
+      const key = sim.forkKey();
+      if (key) {
+        const v = sim.view;
+        const count = (v.menu ?? v.branch)!.length;
+        const remembered = this.choices.get(key);
+        const chosen = remembered !== undefined && remembered < count;
+        forks.push({ i: sim.history.length - 1, chosen, kind: v.menu ? 'menu' : 'branch' });
+        sim.choose(chosen ? remembered! : 0);
+      } else {
+        const before = sim.history.length;
+        sim.advance();
+        if (sim.history.length === before) break; // no progress (shouldn't happen)
+      }
+    }
+    return { stops: sim.history, forks, truncated: !sim.view.ended };
+  }
+
+  /** Jumps to stop `i` of a timeline; Back then walks back along that path. */
+  jumpTo(i: number, timeline: Timeline): void {
+    const target = timeline.stops[i];
+    if (!target) return;
+    this.history = timeline.stops.slice(0, i + 1);
+    this.state = clone(target);
+  }
+
   /** Tap: continue to the next stop (no-op while a menu or branch is open). */
   advance(): void {
     const v = this.state.view;
@@ -103,6 +172,7 @@ export class PlayerEngine {
     const opt = opts?.[i];
     if (!opt) return;
     const frame = this.top();
+    this.choices.set(`${frame.label}:${frame.pc}`, i);
     frame.pc = opt.to;
     v.menu = null;
     v.branch = null;
@@ -151,7 +221,7 @@ export class PlayerEngine {
 
   private stop(): void {
     this.history.push(clone(this.state));
-    if (this.history.length > 500) this.history.splice(0, this.history.length - 500);
+    if (this.history.length > MAX_HISTORY) this.history.splice(0, this.history.length - MAX_HISTORY);
   }
 
   private end(reason: 'end' | 'left-scene' | 'missing', nextLabel?: string): void {
@@ -245,6 +315,9 @@ export class PlayerEngine {
           return this.stop();
         case 'goto':
           frame.pc = s.to;
+          break;
+        case 'set':
+          frame.pc++;
           break;
         case 'jump':
           if (!this.goTo(s.label)) return;

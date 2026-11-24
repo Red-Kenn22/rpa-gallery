@@ -178,7 +178,8 @@ check('thumbnail from image inside APK', (await page.locator('[data-scene="apk_b
 // ── Scene player ──
 const player = page.locator('[data-player]');
 const sayText = () => player.locator('[data-say]').innerText().catch(() => null);
-const tap = async () => { await player.click({ position: { x: 200, y: 200 } }); await page.waitForTimeout(80); };
+const tap = async () => { await player.click({ position: { x: 500, y: 250 } }); await page.waitForTimeout(80); };
+const tapLeftEdge = async () => { await player.click({ position: { x: 40, y: 250 } }); await page.waitForTimeout(80); };
 await page.setViewportSize({ width: 844, height: 390 }); // landscape phone
 await page.locator('[data-scene="w1_date"]').click();
 await page.getByRole('dialog').getByRole('button', { name: /Play scene/ }).click();
@@ -186,32 +187,71 @@ await player.waitFor();
 await page.waitForFunction(() => [...document.querySelectorAll('[data-player] img')].some((i) => i.naturalWidth > 0 && getComputedStyle(i).opacity !== '0'), null, { timeout: 10000 }).catch(() => {});
 check('player shows first line', (await sayText()) === 'Where should we go?', String(await sayText()));
 check('player speaker name', (await player.locator('[data-speaker]').innerText()) === 'Eileen');
+check('first-run back hint', (await player.locator('[data-back-hint]').count()) === 1);
 const layout = await page.evaluate(() => [...document.querySelectorAll('[data-player] img')].map((i) => { const r = i.getBoundingClientRect(); return [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)]; }));
 check('stage fills the landscape screen (1280×720 → 693×390)', layout.length === 2 && layout[0][2] === 693 && layout[0][3] === 390, JSON.stringify(layout));
 check('sprite placed at left', layout[1]?.[0] === layout[0]?.[0], JSON.stringify(layout));
+check('one fork dot on the timeline (assumed)', (await player.locator('[data-fork="assumed"]').count()) === 1);
 await page.screenshot({ path: join(shots, '9-player.png') });
 await tap();
 check('player follows call into shared label', (await sayText()) === 'Your phone buzzes.', String(await sayText()));
+await tapLeftEdge();
+check('tap left edge goes back', (await sayText()) === 'Where should we go?', String(await sayText()));
 await tap();
-check('player menu', (await player.locator('[data-choice]').count()) === 2 && (await player.innerText()).includes('if affection >= 5'));
+await tap();
+
+// Menu: the question + what each choice leads to
+const menuText = await player.innerText();
+check('menu shows the question', (await player.locator('[data-question]').innerText()).includes('Your phone buzzes.'));
+check('three choices', (await player.locator('[data-choice]').count()) === 3);
+const choiceTexts = await player.locator('[data-choice]').allInnerTexts();
+check('park: rejoins + change + checked later', choiceTexts[0].includes('Rejoins after 1 line') && choiceTexts[0].includes('Eileen love +1') && choiceTexts[0].includes('Eileen love is checked in W 1 Night'), choiceTexts[0]);
+check('cafe: requirement, new image, changes', choiceTexts[1].includes('requires affection >= 5') && choiceTexts[1].includes('Rejoins after 1 image') && choiceTexts[1].includes('1 new image') && choiceTexts[1].includes('Lucy love +2') && choiceTexts[1].includes('add_points("lucy", 1)'), choiceTexts[1]);
+check('go home: continues to another scene', choiceTexts[2].includes('Continues: W 1 Night'), choiceTexts[2]);
 await page.screenshot({ path: join(shots, '10-player-menu.png') });
 await player.locator('[data-choice]').nth(1).click();
 await page.waitForTimeout(150);
 check('image-only beat waits for a tap', (await player.locator('[data-say]').count()) === 0);
+check('your choice fills the fork dot', (await player.locator('[data-fork="chosen"]').count()) === 1);
 await tap();
 check('rejoin label', (await sayText()) === 'Later...', String(await sayText()));
 await player.getByLabel('Back one line').click();
 check('back one line', (await player.locator('[data-say]').count()) === 0);
-await tap();
-await tap();
-check('continuation label', (await sayText()) === 'What a day.', String(await sayText()));
+
+// Previous/next choice buttons and the scrubber
+await player.getByLabel('Previous choice').click();
+check('previous choice jumps to the menu', (await player.locator('[data-choice]').count()) === 3);
+await player.getByLabel('Next choice').isDisabled();
+const bar = await player.locator('[data-scrubber]').boundingBox();
+await page.mouse.move(bar.x + 2, bar.y + bar.height / 2);
+await page.mouse.down();
+await page.mouse.move(bar.x + bar.width * 0.35, bar.y + bar.height / 2, { steps: 4 });
+check('scrub preview shows the line', (await player.locator('[data-scrub-preview]').count()) === 1);
+await page.screenshot({ path: join(shots, '11-player-scrub.png') });
+await page.mouse.move(bar.x + bar.width - 1, bar.y + bar.height / 2, { steps: 4 });
+await page.mouse.up();
+await page.waitForTimeout(150);
+check('scrubbing to the end shows the end screen', (await player.locator('[data-ended]').count()) === 1);
+await player.getByLabel('Close player').isVisible();
+
+// Scene log: jump to any line
+if (await player.locator('[data-ended]').count()) await player.locator('[data-ended]').getByRole('button', { name: 'Replay' }).click();
+await player.getByLabel('Scene log').click();
+await player.locator('[data-history]').waitFor();
+check('log lists the scene', (await player.locator('[data-log-line]').count()) >= 6);
+await page.screenshot({ path: join(shots, '12-player-log.png') });
+await player.locator('[data-log-line]', { hasText: 'What a day.' }).click();
+check('log jump', (await sayText()) === 'What a day.', String(await sayText()));
 await tap();
 await player.locator('[data-ended]').waitFor();
 check('end of scene offers next scene', (await player.locator('[data-ended]').innerText()).includes('Continue: W 1 Night'));
-await page.screenshot({ path: join(shots, '11-player-end.png') });
 await player.getByRole('button', { name: /Continue: W 1 Night/ }).click();
 await page.waitForTimeout(150);
 check('continues into the next scene', (await sayText()) === 'Your phone buzzes.', String(await sayText()));
+await tap();
+const branchTexts = await player.locator('[data-branch]').allInnerTexts();
+check('if picker explains what it depends on', branchTexts[0]?.includes('eileen_love >= 1') && branchTexts[0]?.includes('Eileen love: +1 by choosing “Park” in W 1 Date'), JSON.stringify(branchTexts));
+await page.screenshot({ path: join(shots, '13-player-branch.png') });
 await player.getByLabel('Close player').click();
 await player.waitFor({ state: 'detached' });
 check('closing the player returns to its scene', (await page.getByRole('dialog').innerText()).includes('W 1 Night'));

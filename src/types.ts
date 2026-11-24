@@ -134,13 +134,41 @@ export type Step =
   | { t: 'pause' }
   /** Cutscene: plays once full screen, then continues. */
   | { t: 'video'; img: string | null; name: string }
-  | { t: 'menu'; choices: { text: string; cond: string | null; to: number }[] }
+  /** `exit` = first step after the whole menu (where choices that don't jump rejoin). */
+  | { t: 'menu'; choices: { text: string; cond: string | null; to: number; info?: ChoiceInfo }[]; exit: number }
   /** `if`/`elif`/`else`: the player asks which branch to take (or takes the first). */
-  | { t: 'branch'; options: { cond: string; to: number }[] }
+  | { t: 'branch'; options: { cond: string; to: number; info?: ChoiceInfo }[]; exit: number }
+  /** Variable changes from Python (`$ lucy_love += 1`); no-op for the player, used for choice details. */
+  | { t: 'set'; changes: VarChange[] }
   | { t: 'goto'; to: number }
   | { t: 'jump'; label: string }
   | { t: 'call'; label: string }
   | { t: 'return' };
+
+/** `op: 'call'` records a game function call such as `add_points("lucy", 2)` in `val`. */
+export interface VarChange {
+  v: string;
+  op: '+=' | '-=' | '=' | 'call';
+  val: string;
+}
+
+/** What a menu choice (or if-branch) leads to, from static analysis of the scripts. */
+export interface ChoiceInfo {
+  /** rejoin = continues in this scene; ends = scene ends; leaves = jumps to another scene's label. */
+  dest: { k: 'rejoin' } | { k: 'ends' } | { k: 'leaves'; label: string };
+  lines: number;
+  secs: number;
+  images: number;
+  /** Images only reachable through this option (not the menu's other options). */
+  uniqueImages: number;
+  videos: number;
+  chars: string[];
+  changes: VarChange[];
+  /** Scenes whose conditions check each changed variable. */
+  usedIn: { v: string; scenes: string[]; total: number }[];
+  /** If-branches: for each variable in the condition, which choices set it. */
+  deps?: { v: string; setBy: { scene: string; choice: string; change: string }[] }[];
+}
 
 export interface LabelProgram {
   file: string;

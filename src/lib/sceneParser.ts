@@ -10,6 +10,7 @@
 
 import type { CharacterInfo, DialogueLine, SceneInfo, ScenePrograms } from '../types';
 import { isVisual, mediaKind } from './media';
+import { annotateChoices } from './consequences';
 import { compileLabel, programPaths } from './program';
 import { callAt, findCalls, findStringLiterals, literalValue, stripTextTags } from './pyString';
 import { childBlocks, type ScriptFile, type Stmt } from './scriptModel';
@@ -298,14 +299,19 @@ interface Edge {
   kind: EdgeKind;
 }
 
-/** Does a block run off its end (no unconditional jump/return)? */
+/**
+ * Can a block run off its end? False when its last statement always leaves:
+ * jump/return, a nested label, or a menu/if whose every branch leaves.
+ */
 function completes(body: Stmt[]): boolean {
   for (let i = body.length - 1; i >= 0; i--) {
     const s = body[i];
-    if (s.k === 'jump' || s.k === 'return') return false;
-    if (s.k === 'label') return false; // handled as a fall into the nested label
-    if (s.k === 'python' && /renpy\.jump\s*\(/.test(s.source)) return false;
-    if (s.k !== 'define' && s.k !== 'image') return true;
+    if (s.k === 'define' || s.k === 'image') continue;
+    if (s.k === 'jump' || s.k === 'return' || s.k === 'label') return false;
+    if (s.k === 'python') return !/renpy\.jump\s*\(/.test(s.source);
+    if (s.k === 'menu') return s.choices.some((c) => completes(c.body));
+    if (s.k === 'if') return !s.entries.some((e) => e.cond === 'True') || s.entries.some((e) => completes(e.body));
+    return true;
   }
   return true;
 }
@@ -366,8 +372,9 @@ function continuationStem(name: string): string {
 /**
  * Groups labels into scenes. A label joins its predecessor's scene when every
  * way into it comes from that one scene AND it is either a local label
- * (`parent.sub`), reached from a menu choice / if branch (or rejoins after
- * one), or an explicitly named continuation (`x_part2` after `x`). Plain
+ * (`parent.sub`), only reached from menu choices / if branches or the labels
+ * they lead to (branch content and rejoins), or an explicitly named
+ * continuation (`x_part2` after `x`). Plain
  * linear jumps to differently named labels start a new scene, so a linear
  * game doesn't collapse into one giant scene.
  */
@@ -390,7 +397,9 @@ function mergeScenes(labels: Map<string, LabelNode>, edges: Edge[]): Map<string,
       const s = [...scenesIn][0]!;
       const sameFile = labels.get(s)!.file === l.file;
       const local = l.parent !== null && sceneOf.get(l.parent) === s;
-      const viaBranch = ins.some((e) => e.kind === 'branch' || branchMember.has(e.from));
+      // Branch content or a rejoin: every way in is a menu/if choice or comes from branch content.
+      // (A label that is also the scene's plain linear exit stays a scene of its own.)
+      const viaBranch = ins.every((e) => e.kind === 'branch' || branchMember.has(e.from));
       const continuation = ins.some((e) => {
         const a = continuationStem(e.from);
         const b = continuationStem(l.name);
@@ -674,6 +683,8 @@ export function buildScenes(files: ScriptFile[], assets: AssetLookup): ScenePars
       }
     }
   }
+
+  annotateChoices(programs, scenes);
 
   const characters = [...charStats.values()]
     .filter((c) => c.sceneCount > 0)

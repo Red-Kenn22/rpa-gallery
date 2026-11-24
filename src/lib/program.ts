@@ -5,7 +5,7 @@
  * paths and character ids.
  */
 
-import type { StagePos, Step } from '../types';
+import type { StagePos, Step, VarChange } from '../types';
 import { findCalls, findStringLiterals, literalValue, stripTextTags } from './pyString';
 import type { Stmt } from './scriptModel';
 import { mediaKind } from './media';
@@ -31,6 +31,35 @@ export function positionFromAt(at: string[]): StagePos | null {
   return null;
 }
 
+const IGNORED_VARS = /^(?:config|gui|style|renpy|preferences|build|_|achievement|ui|layout)\b|^_/;
+const IGNORED_CALLS = /^(?:renpy|store\.renpy|ui|config|gui|style|im|Transform|Character|Movie|Image|Solid|Composite|LiveComposite|ConditionSwitch|Dissolve|Fade|Pause|nvl_|hide_|show_|Show|Hide|Jump|Function|NullAction|Return|SetVariable|Play|Stop|Queue)\b|^(?:print|len|str|int|float|list|dict|set|range|min|max|abs|round|sorted|setattr|getattr|hasattr|isinstance|super|type)$/;
+
+/**
+ * Simple variable changes in Python code: `x += 1`, `lucy.love -= 2`,
+ * `met = True`, plus bare game-function calls like `add_points("lucy", 2)`.
+ */
+export function parseAssignments(source: string): VarChange[] {
+  const out: VarChange[] = [];
+  for (const raw of source.split(/\n|;/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    const m = /^((?:store\.)?[A-Za-z_][\w]*(?:\.[A-Za-z_]\w*)*(?:\[[^\]]+\])?)\s*(\+=|-=|=)(?!=)\s*(.+)$/.exec(line);
+    if (m) {
+      const v = m[1].replace(/^store\./, '');
+      const val = m[3].trim();
+      if (IGNORED_VARS.test(v) || /\bCharacter\s*\(|\b(?:renpy|Movie|Transform|im)\./.test(val)) continue;
+      if (m[2] === '=' && /\(/.test(val) && !/^(?:int|float|str|bool|min|max)\(/.test(val)) continue;
+      out.push({ v, op: m[2] as VarChange['op'], val: val.length > 40 ? `${val.slice(0, 39)}…` : val });
+      continue;
+    }
+    const call = /^([A-Za-z_][\w.]*)\s*\((.*)\)\s*$/.exec(line);
+    if (call && !IGNORED_CALLS.test(call[1]) && !call[1].startsWith('_')) {
+      out.push({ v: call[1], op: 'call', val: line.length > 48 ? `${line.slice(0, 47)}…` : line });
+    }
+  }
+  return out.slice(0, 8);
+}
+
 interface PyEvent {
   at: number;
   step: Step;
@@ -38,7 +67,9 @@ interface PyEvent {
 
 /** Player-relevant calls inside Python code, in source order. */
 function pythonSteps(source: string, reg: Registry): Step[] {
-  if (!/renpy\.|Movie/.test(source)) return [];
+  const changes = parseAssignments(source);
+  const setStep: Step[] = changes.length ? [{ t: 'set', changes }] : [];
+  if (!/renpy\.|Movie/.test(source)) return setStep;
   const events: PyEvent[] = [];
   for (const c of findCalls(source, /renpy\.(?:pause|movie_cutscene|show|scene|jump|call)/)) {
     const arg = literalValue(c.args.positional[0]);
@@ -66,7 +97,7 @@ function pythonSteps(source: string, reg: Registry): Step[] {
         break;
     }
   }
-  return events.sort((a, b) => a.at - b.at).map((e) => e.step);
+  return [...setStep, ...events.sort((a, b) => a.at - b.at).map((e) => e.step)];
 }
 
 function userSteps(text: string, reg: Registry): Step[] {
@@ -119,7 +150,7 @@ export function compileLabel(body: Stmt[], reg: Registry): Step[] {
           steps.push(...userSteps(s.text, reg));
           break;
         case 'menu': {
-          const menu: Extract<Step, { t: 'menu' }> = { t: 'menu', choices: [] };
+          const menu: Extract<Step, { t: 'menu' }> = { t: 'menu', choices: [], exit: -1 };
           steps.push(menu);
           const exits: Extract<Step, { t: 'goto' }>[] = [];
           for (const c of s.choices) {
@@ -130,10 +161,11 @@ export function compileLabel(body: Stmt[], reg: Registry): Step[] {
             exits.push(g);
           }
           for (const g of exits) g.to = steps.length;
+          menu.exit = steps.length;
           break;
         }
         case 'if': {
-          const br: Extract<Step, { t: 'branch' }> = { t: 'branch', options: [] };
+          const br: Extract<Step, { t: 'branch' }> = { t: 'branch', options: [], exit: -1 };
           steps.push(br);
           const exits: Extract<Step, { t: 'goto' }>[] = [];
           for (const e of s.entries) {
@@ -147,6 +179,7 @@ export function compileLabel(body: Stmt[], reg: Registry): Step[] {
           if (!s.entries.some((e) => e.cond === 'True')) br.options.push({ cond: 'none of the above', to: -1 });
           for (const g of exits) g.to = steps.length;
           for (const o of br.options) if (o.to === -1) o.to = steps.length;
+          br.exit = steps.length;
           break;
         }
         case 'while':

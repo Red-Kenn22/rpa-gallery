@@ -53,3 +53,12 @@ export const AlertIcon = (p: P) => (
 export const ClockIcon = (p: P) => (
   <svg {...base(p)}><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>
 );
+export const ListIcon = (p: P) => (
+  <svg {...base(p)}><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /></svg>
+);
+export const ForkPrevIcon = (p: P) => (
+  <svg {...base(p)}><path d="M11 18l-6-6 6-6" /><path d="M17 9l3 3-3 3-3-3z" fill="currentColor" /></svg>
+);
+export const ForkNextIcon = (p: P) => (
+  <svg {...base(p)}><path d="M13 6l6 6-6 6" /><path d="M7 9l3 3-3 3-3-3z" fill="currentColor" /></svg>
+);

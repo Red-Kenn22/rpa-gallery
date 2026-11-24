@@ -23,7 +23,9 @@ export function SceneGrid({
   const sentinel = useRef<HTMLDivElement>(null);
   const nearEnd = useInView(sentinel, '800px 0px');
 
-  useEffect(() => setLimit(PAGE), [scenes]);
+  useEffect(() => {
+    setLimit(PAGE);
+  }, [scenes]);
   useEffect(() => {
     if (nearEnd && limit < scenes.length) setLimit((l) => Math.min(scenes.length, l + PAGE));
   }, [nearEnd, limit, scenes.length]);
