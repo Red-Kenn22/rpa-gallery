@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { assetBlob } from '../lib/archiveClient';
+import { loadAssetBlob } from '../lib/archiveClient';
 import { getCachedThumb, putCachedThumb } from '../lib/cache';
 import { makeThumbnail, thumbnailQueue } from '../lib/thumbnailer';
 import type { GalleryIndex, SceneInfo } from '../types';
@@ -42,7 +42,7 @@ export function useThumbnail(index: GalleryIndex, scene: SceneInfo, files: File[
         if (!asset || (asset.kind !== 'image' && asset.kind !== 'video')) continue;
         try {
           const kind = asset.kind;
-          const url = await thumbnailQueue.add(() => makeThumbnail(assetBlob(files, asset), kind), ac.signal);
+          const url = await thumbnailQueue.add(async () => makeThumbnail(await loadAssetBlob(files, asset), kind), ac.signal);
           if (ac.signal.aborted) return;
           setState({ src: url, status: 'ready' });
           void putCachedThumb(index.key, path, url);

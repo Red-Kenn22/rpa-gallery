@@ -84,15 +84,19 @@ export function atlLiterals(atl: unknown, limit = 64): string[] {
 interface Imspec {
   name: string[];
   expr: string | null;
+  at: string[];
 }
 
 /** imspec: (name, at_list, layer) or (name, expression, tag, at_list, layer, zorder[, behind]). */
 function readImspec(v: unknown): Imspec | null {
   if (!Array.isArray(v) || v.length === 0) return null;
   const name = strTuple(v[0]);
-  const expr = v.length >= 6 ? pyCodeSource(v[1]) : null;
+  const long = v.length >= 6;
+  const expr = long ? pyCodeSource(v[1]) : null;
+  const atRaw = long ? v[3] : v[1];
+  const at = Array.isArray(atRaw) ? atRaw.map((a) => pyCodeSource(a)).filter((a): a is string => !!a) : [];
   if (!name.length && !expr) return null;
-  return { name, expr };
+  return { name, expr, at };
 }
 
 function isNullLanguage(node: PyObject): boolean {
@@ -107,6 +111,12 @@ export class AstWalker {
   walk(stmts: unknown): Stmt[] {
     const out: Stmt[] = [];
     this.block(stmts, out, 0);
+    return out;
+  }
+
+  private sub(block: unknown, depth: number): Stmt[] {
+    const out: Stmt[] = [];
+    this.block(block, out, depth);
     return out;
   }
 
@@ -143,8 +153,15 @@ export class AstWalker {
       }
 
       case 'Init':
-      case 'While':
         this.block(attr(node, 'block'), out, depth);
+        return;
+
+      case 'While':
+        out.push({ k: 'while', cond: pyCodeSource(attr(node, 'condition')) ?? 'True', body: this.sub(attr(node, 'block'), depth), line });
+        return;
+
+      case 'Return':
+        out.push({ k: 'return', line });
         return;
 
       case 'Translate':
@@ -153,36 +170,47 @@ export class AstWalker {
 
       case 'If': {
         const entries = attr(node, 'entries');
-        if (Array.isArray(entries)) {
-          for (const e of entries) if (Array.isArray(e)) this.block(e[1], out, depth);
-        }
+        if (!Array.isArray(entries)) return;
+        const list = entries
+          .filter((e): e is unknown[] => Array.isArray(e))
+          .map((e) => ({ cond: pyCodeSource(e[0]) ?? 'True', body: this.sub(e[1], depth) }));
+        if (list.length) out.push({ k: 'if', entries: list, line });
         return;
       }
 
       case 'Menu': {
         const items = attr(node, 'items');
         if (!Array.isArray(items)) return;
-        const choices: string[] = [];
+        const choices: { text: string; cond: string | null; body: Stmt[] }[] = [];
         for (const it of items) {
           if (!Array.isArray(it)) continue;
           const caption = str(it[0]);
-          if (it[2] != null && caption) choices.push(caption);
-          else if (caption) out.push({ k: 'say', who: null, what: caption, line }); // narration caption
+          if (it[2] != null && caption !== null) {
+            const cond = pyCodeSource(it[1]);
+            choices.push({ text: caption, cond: cond && cond !== 'True' ? cond : null, body: this.sub(it[2], depth) });
+          } else if (caption) {
+            out.push({ k: 'say', who: null, what: caption, line }); // narration caption
+          }
         }
         if (choices.length) out.push({ k: 'menu', choices, line });
-        for (const it of items) if (Array.isArray(it)) this.block(it[2], out, depth);
         return;
       }
 
       case 'Scene': {
         const spec = readImspec(attr(node, 'imspec'));
-        out.push({ k: 'scene', name: spec?.name.length ? spec.name : null, expr: spec?.expr ?? null, line });
+        out.push({ k: 'scene', name: spec?.name.length ? spec.name : null, expr: spec?.expr ?? null, at: spec?.at ?? [], line });
         return;
       }
 
       case 'Show': {
         const spec = readImspec(attr(node, 'imspec'));
-        if (spec) out.push({ k: 'show', name: spec.name, expr: spec.expr, line });
+        if (spec) out.push({ k: 'show', name: spec.name, expr: spec.expr, at: spec.at, line });
+        return;
+      }
+
+      case 'Hide': {
+        const spec = readImspec(attr(node, 'imspec'));
+        if (spec?.name.length) out.push({ k: 'hide', name: spec.name, line });
         return;
       }
 
@@ -231,10 +259,8 @@ export class AstWalker {
       }
 
       // Nothing to extract.
-      case 'Hide':
       case 'With':
       case 'Pass':
-      case 'Return':
       case 'ShowLayer':
       case 'Camera':
       case 'Default':

@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CharacterFilterBar } from './components/CharacterFilterBar';
+import { CharacterFilterBar, SortBar, type SortMode } from './components/CharacterFilterBar';
 import { Header } from './components/Header';
 import { AlertIcon } from './components/Icons';
 import { IndexingProgress } from './components/IndexingProgress';
 import { SceneGrid } from './components/SceneGrid';
+import { ScenePlayer } from './components/ScenePlayer';
 import { ScenePreviewModal } from './components/ScenePreviewModal';
 import { ScriptsNotice } from './components/ScriptsNotice';
 import { Welcome } from './components/Welcome';
@@ -19,17 +20,28 @@ export default function App() {
   const { state, open, openCached, attachFiles, cancel, close } = useArchive();
   const [query, setQuery] = useState('');
   const [character, setCharacter] = useState<string | null>(null);
+  const [sort, setSort] = useState<SortMode>('story');
   const [openScene, setOpenScene] = useState<SceneInfo | null>(null);
-  const pushedHistory = useRef(false);
+  const [playScene, setPlayScene] = useState<SceneInfo | null>(null);
+  /** History entries we pushed for open overlays (sheet, player), so Back closes them. */
+  const pushed = useRef(0);
 
   const index = state.status === 'ready' ? state.index : null;
   const files = state.status === 'ready' ? state.files : null;
+  const programs = state.status === 'ready' ? state.programs : null;
 
   useEffect(() => {
     setQuery('');
     setCharacter(null);
     setOpenScene(null);
+    setPlayScene(null);
   }, [index?.key]);
+
+  const sceneForLabel = useMemo(() => {
+    const map = new Map<string, SceneInfo>();
+    for (const s of index?.scenes ?? []) for (const l of s.labels) if (!map.has(l)) map.set(l, s);
+    return (label: string) => map.get(label);
+  }, [index]);
 
   const characters = useMemo(() => new Map<string, CharacterInfo>((index?.characters ?? []).map((c) => [c.id, c])), [index]);
 
@@ -44,25 +56,52 @@ export default function App() {
     });
   }, [index, query, character, characters]);
 
-  // The Android back button / iOS back swipe closes the preview instead of leaving the app.
-  const showScene = useCallback((scene: SceneInfo) => {
-    setOpenScene(scene);
-    if (!pushedHistory.current) {
-      history.pushState({ scene: scene.id }, '');
-      pushedHistory.current = true;
-    }
-  }, []);
-  const hideScene = useCallback(() => {
-    if (pushedHistory.current) {
-      pushedHistory.current = false;
+  const sorted = useMemo(() => {
+    if (sort === 'story') return filtered;
+    const dir = sort === 'longest' ? -1 : 1;
+    return [...filtered].sort((a, b) => dir * (a.durationSec - b.durationSec));
+  }, [filtered, sort]);
+
+  // The Android back button / iOS back swipe closes the topmost overlay instead of leaving the app.
+  const ignorePop = useRef(0);
+  const pushOverlay = () => {
+    history.pushState({ overlay: true }, '');
+    pushed.current++;
+  };
+  const popOverlay = () => {
+    if (pushed.current > 0) {
+      pushed.current--;
+      ignorePop.current++; // our own history.back(), not the user's
       history.back();
     }
-    setOpenScene(null);
+  };
+  const showScene = useCallback((scene: SceneInfo) => {
+    setOpenScene(scene);
+    pushOverlay();
   }, []);
+  const hideScene = useCallback(() => {
+    setOpenScene(null);
+    popOverlay();
+  }, []);
+  const startPlayer = useCallback((scene: SceneInfo) => {
+    setPlayScene(scene);
+    pushOverlay();
+  }, []);
+  const closePlayer = useCallback(() => {
+    setPlayScene(null);
+    popOverlay();
+  }, []);
+  const playSceneRef = useRef(playScene);
+  playSceneRef.current = playScene;
   useEffect(() => {
     const onPop = () => {
-      pushedHistory.current = false;
-      setOpenScene(null);
+      if (ignorePop.current > 0) {
+        ignorePop.current--;
+        return;
+      }
+      pushed.current = Math.max(0, pushed.current - 1);
+      if (playSceneRef.current) setPlayScene(null);
+      else setOpenScene(null);
     };
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
@@ -118,7 +157,10 @@ export default function App() {
               {index.stats.scriptsFound === 0 && "Try selecting all of the game's .rpa files, plus any loose .rpyc files from its game folder."}
             </p>
           ) : (
-            <SceneGrid scenes={filtered} index={index} files={files} characters={characters} onOpen={showScene} />
+            <>
+              <SortBar value={sort} onChange={setSort} count={sorted.length} />
+              <SceneGrid scenes={sorted} index={index} files={files} characters={characters} onOpen={showScene} />
+            </>
           )}
 
           {index.warnings.length > 0 && (
@@ -142,13 +184,39 @@ export default function App() {
 
       {index && openScene && (
         <ScenePreviewModal
-          key={openScene.id}
+          key={`sheet:${openScene.id}`}
           scene={openScene}
           index={index}
           files={files}
           characters={characters}
           onClose={hideScene}
           onAttachFiles={attachFiles}
+          onPlay={() => startPlayer(openScene)}
+          playState={
+            index.mode !== 'scripts' || programs === null
+              ? 'unavailable'
+              : programs === undefined
+                ? 'loading'
+                : !files
+                  ? 'needs-files'
+                  : 'ready'
+          }
+        />
+      )}
+
+      {index && playScene && programs && files && (
+        <ScenePlayer
+          key={`player:${playScene.id}`}
+          scene={playScene}
+          index={index}
+          programs={programs}
+          files={files}
+          sceneForLabel={sceneForLabel}
+          onClose={closePlayer}
+          onContinue={(next) => {
+            setPlayScene(next);
+            setOpenScene(next);
+          }}
         />
       )}
     </div>

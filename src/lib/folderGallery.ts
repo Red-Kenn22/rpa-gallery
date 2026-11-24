@@ -6,7 +6,7 @@
  */
 
 import type { CharacterInfo, SceneInfo } from '../types';
-import { mediaKind } from './sceneParser';
+import { mediaKind } from './media';
 
 const MAX_PER_GROUP = 240;
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
@@ -61,6 +61,9 @@ export function buildFolderGallery(paths: Iterable<string>): FolderGallery {
       const thumb = videos[0] ? { path: videos[0], kind: 'video' as const } : { path: images[0], kind: 'image' as const };
       scenes.push({
         id: parts > 1 ? `${dir || '.'}#${part + 1}` : dir || '.',
+        labels: [],
+        // Browsing time: a couple of seconds per image, a few per video.
+        durationSec: images.length * 2 + videos.length * 6,
         title: parts > 1 ? `${baseTitle} · ${part + 1}/${parts}` : baseTitle,
         file: dir || '(archive root)',
         line: 0,

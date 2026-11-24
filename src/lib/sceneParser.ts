@@ -2,33 +2,21 @@
  * Turns parsed script statements into the gallery model:
  *   characters  – `define e = Character("Eileen")` (and Python equivalents)
  *   image map   – `image bg beach = "…"`, Movie(...), ATL, auto `images/` files
- *   scenes      – one per label: speakers, sprites shown, backgrounds,
- *                 videos, dialogue, thumbnail
+ *   scenes      – labels merged into whole scenes (continuations, menu
+ *                 branches and rejoins, local labels), with speakers, sprites,
+ *                 backgrounds, videos, dialogue, thumbnail and estimated time
+ *   programs    – every label compiled for the scene player
  */
 
-import type { CharacterInfo, DialogueLine, MediaKind, SceneInfo } from '../types';
+import type { CharacterInfo, DialogueLine, SceneInfo, ScenePrograms } from '../types';
+import { isVisual, mediaKind } from './media';
+import { compileLabel, programPaths } from './program';
 import { callAt, findCalls, findStringLiterals, literalValue, stripTextTags } from './pyString';
-import { extensionOf } from './rpaParser';
-import type { ScriptFile, Stmt } from './scriptModel';
+import { childBlocks, type ScriptFile, type Stmt } from './scriptModel';
+
+export { mediaKind } from './media';
 
 export const DIALOGUE_CAP = 400;
-
-const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'webp', 'avif', 'bmp', 'gif', 'tga', 'svg']);
-const VIDEO_EXT = new Set(['webm', 'mp4', 'm4v', 'ogv', 'mkv', 'avi', 'mpg', 'mpeg', 'mov']);
-const AUDIO_EXT = new Set(['ogg', 'opus', 'mp3', 'wav', 'flac']);
-
-export function mediaKind(path: string): MediaKind {
-  const ext = extensionOf(path);
-  if (IMAGE_EXT.has(ext)) return 'image';
-  if (VIDEO_EXT.has(ext)) return 'video';
-  if (AUDIO_EXT.has(ext)) return 'audio';
-  return 'other';
-}
-
-const isVisual = (p: string) => {
-  const k = mediaKind(p);
-  return k === 'image' || k === 'video';
-};
 
 /** Resolves script-relative file names to canonical archive paths. */
 export interface AssetLookup {
@@ -39,6 +27,14 @@ export interface AssetLookup {
 const NARRATORS = new Set(['narrator', 'centered', 'vcentered', 'nvl', 'adv', 'nvl_narrator', 'adv_narrator', 'name_only']);
 const ENGINE_LABELS = new Set(['main_menu', 'before_main_menu', 'after_load', 'after_warp', 'quit', 'hide_windows']);
 const CHARACTER_CALL = /(?:\w+\.)*(?:Character|ADVCharacter|NVLCharacter|DynamicCharacter|SpeakingCharacter)/;
+
+// Time estimate: ~200 words per minute plus a tap per line.
+const WORDS_PER_SEC = 200 / 60;
+const SECS_PER_LINE = 1;
+const SECS_PER_IMAGE = 1.5;
+const SECS_PER_PAUSE = 2;
+const SECS_PER_VIDEO = 6;
+const SECS_PER_MENU = 3;
 
 interface CharDef {
   id: string;
@@ -110,9 +106,18 @@ function aliasFromSource(source: string): ImageAlias | null {
   return aliasFromLiterals(findStringLiterals(source).map((l) => l.value));
 }
 
-class Registry {
+/** Recursively visits every statement (including inside labels, menus, ifs). */
+function forEachStmt(stmts: Stmt[], fn: (s: Stmt) => void): void {
+  for (const s of stmts) {
+    fn(s);
+    for (const b of childBlocks(s)) forEachStmt(b, fn);
+  }
+}
+
+export class Registry {
   readonly chars = new Map<string, CharDef>();
   readonly images = new Map<string, ImageAlias>();
+  stage: { w: number; h: number } | null = null;
   private byTag = new Map<string, string[][]>();
   private tagToChar = new Map<string, string>();
   private nameToChar = new Map<string, string>();
@@ -123,15 +128,16 @@ class Registry {
   }
 
   collect(stmts: Stmt[]): void {
-    for (const s of stmts) {
+    forEachStmt(stmts, (s) => {
       switch (s.k) {
-        case 'label':
-          this.collect(s.body);
-          break;
         case 'define':
           if (s.store === 'store' || s.store === 'store.character') {
             const def = parseCharacterExpr(s.source, s.name);
             if (def) this.chars.set(s.name, def);
+          }
+          if (s.store === 'store.config' && (s.name === 'screen_width' || s.name === 'screen_height')) {
+            const n = parseInt(s.source, 10);
+            if (n > 0) this.setStage(s.name === 'screen_width' ? n : undefined, s.name === 'screen_height' ? n : undefined);
           }
           break;
         case 'python':
@@ -143,7 +149,12 @@ class Registry {
           break;
         }
       }
-    }
+    });
+  }
+
+  private setStage(w?: number, h?: number): void {
+    const cur = this.stage ?? { w: 0, h: 0 };
+    this.stage = { w: w ?? cur.w, h: h ?? cur.h };
   }
 
   private collectPython(source: string): void {
@@ -162,10 +173,16 @@ class Registry {
         if (name && alias) this.images.set(name.toLowerCase(), alias);
       }
     }
+    const gui = /gui\.init\(\s*(\d+)\s*,\s*(\d+)\s*\)/.exec(source);
+    if (gui) this.setStage(+gui[1], +gui[2]);
+    const sw = /config\.screen_width\s*=\s*(\d+)/.exec(source);
+    const sh = /config\.screen_height\s*=\s*(\d+)/.exec(source);
+    if (sw || sh) this.setStage(sw ? +sw[1] : undefined, sh ? +sh[1] : undefined);
   }
 
   /** Call once after every script has been collected. */
   finish(): void {
+    if (this.stage && (!this.stage.w || !this.stage.h)) this.stage = null;
     // Ren'Py auto-defines images from files under images/ (name = lowercased basename).
     for (const path of this.assets.paths()) {
       const lower = path.toLowerCase();
@@ -260,12 +277,218 @@ class Registry {
   }
 }
 
+// ─── Label graph ────────────────────────────────────────────────────────────
+
+interface LabelNode {
+  name: string;
+  file: string;
+  /** Global script order (file order, then position). */
+  order: number;
+  line: number;
+  body: Stmt[];
+  /** Label that runs when this one's block ends without jump/return. */
+  fallNext: string | null;
+  parent: string | null;
+}
+
+type EdgeKind = 'jump' | 'branch' | 'call' | 'fall';
+interface Edge {
+  from: string;
+  to: string;
+  kind: EdgeKind;
+}
+
+/** Does a block run off its end (no unconditional jump/return)? */
+function completes(body: Stmt[]): boolean {
+  for (let i = body.length - 1; i >= 0; i--) {
+    const s = body[i];
+    if (s.k === 'jump' || s.k === 'return') return false;
+    if (s.k === 'label') return false; // handled as a fall into the nested label
+    if (s.k === 'python' && /renpy\.jump\s*\(/.test(s.source)) return false;
+    if (s.k !== 'define' && s.k !== 'image') return true;
+  }
+  return true;
+}
+
+function collectLabels(files: ScriptFile[]): Map<string, LabelNode> {
+  const labels = new Map<string, LabelNode>();
+  let order = 0;
+  for (const f of files) {
+    const top = f.stmts.filter((s): s is Extract<Stmt, { k: 'label' }> => s.k === 'label');
+    top.forEach((l, i) => {
+      const fallNext = top[i + 1]?.name ?? null;
+      const visit = (node: Extract<Stmt, { k: 'label' }>, parent: string | null, next: string | null) => {
+        if (!labels.has(node.name)) {
+          labels.set(node.name, { name: node.name, file: f.path, order: order++, line: node.line, body: node.body, fallNext: next, parent });
+        }
+        forEachStmt(node.body, (s) => {
+          if (s.k === 'label') visit(s, node.name, next);
+        });
+      };
+      visit(l, null, fallNext);
+    });
+  }
+  return labels;
+}
+
+function collectEdges(labels: Map<string, LabelNode>): Edge[] {
+  const edges: Edge[] = [];
+  for (const l of labels.values()) {
+    const scan = (stmts: Stmt[], inBranch: boolean) => {
+      for (const s of stmts) {
+        if (s.k === 'jump') edges.push({ from: l.name, to: s.target, kind: inBranch ? 'branch' : 'jump' });
+        else if (s.k === 'call') edges.push({ from: l.name, to: s.target, kind: 'call' });
+        else if (s.k === 'label') {
+          edges.push({ from: l.name, to: s.name, kind: inBranch ? 'branch' : 'fall' });
+          return; // the nested label scans its own body
+        } else if (s.k === 'menu') s.choices.forEach((c) => scan(c.body, true));
+        else if (s.k === 'if') s.entries.forEach((e) => scan(e.body, true));
+        else if (s.k === 'while') scan(s.body, inBranch);
+        else if (s.k === 'python' && /renpy\.(?:jump|call)/.test(s.source)) {
+          for (const c of findCalls(s.source, /renpy\.(?:jump|call)/)) {
+            const t = literalValue(c.args.positional[0]);
+            if (t) edges.push({ from: l.name, to: t, kind: c.callee === 'renpy.call' ? 'call' : inBranch ? 'branch' : 'jump' });
+          }
+        }
+      }
+    };
+    scan(l.body, false);
+    if (l.fallNext && completes(l.body)) edges.push({ from: l.name, to: l.fallNext, kind: 'fall' });
+  }
+  return edges.filter((e) => labels.has(e.to) && e.to !== e.from);
+}
+
+/** Explicit continuation suffixes: _part2, _cont, -pt3, .end … */
+function continuationStem(name: string): string {
+  return name.toLowerCase().replace(/[_\-.]?(?:part|pt|cont|continued|continue|end)[_\-]?\d*$/, '');
+}
+
+/**
+ * Groups labels into scenes. A label joins its predecessor's scene when every
+ * way into it comes from that one scene AND it is either a local label
+ * (`parent.sub`), reached from a menu choice / if branch (or rejoins after
+ * one), or an explicitly named continuation (`x_part2` after `x`). Plain
+ * linear jumps to differently named labels start a new scene, so a linear
+ * game doesn't collapse into one giant scene.
+ */
+function mergeScenes(labels: Map<string, LabelNode>, edges: Edge[]): Map<string, string[]> {
+  const incoming = new Map<string, Edge[]>();
+  for (const e of edges) {
+    const list = incoming.get(e.to) ?? [];
+    list.push(e);
+    incoming.set(e.to, list);
+  }
+  const sceneOf = new Map<string, string>();
+  const branchMember = new Set<string>();
+  const ordered = [...labels.values()].sort((a, b) => a.order - b.order);
+
+  for (const l of ordered) {
+    const ins = incoming.get(l.name) ?? [];
+    const scenesIn = new Set(ins.map((e) => sceneOf.get(e.from)));
+    let target: string | undefined;
+    if (ins.length && scenesIn.size === 1 && !scenesIn.has(undefined)) {
+      const s = [...scenesIn][0]!;
+      const sameFile = labels.get(s)!.file === l.file;
+      const local = l.parent !== null && sceneOf.get(l.parent) === s;
+      const viaBranch = ins.some((e) => e.kind === 'branch' || branchMember.has(e.from));
+      const continuation = ins.some((e) => {
+        const a = continuationStem(e.from);
+        const b = continuationStem(l.name);
+        return b.length > 1 && a === b;
+      });
+      if (local || (sameFile && (viaBranch || continuation))) target = s;
+      if (target && ins.some((e) => e.kind === 'branch')) branchMember.add(l.name);
+    }
+    sceneOf.set(l.name, target ?? l.name);
+  }
+
+  const scenes = new Map<string, string[]>();
+  for (const l of ordered) {
+    const s = sceneOf.get(l.name)!;
+    const list = scenes.get(s) ?? [];
+    list.push(l.name);
+    scenes.set(s, list);
+  }
+  return scenes;
+}
+
+// ─── Time estimate ──────────────────────────────────────────────────────────
+
+function readingSecs(text: string): number {
+  const words = Math.max(text.split(/\s+/).filter(Boolean).length, text.length / 6);
+  return words / WORDS_PER_SEC + SECS_PER_LINE;
+}
+
+/** Typical-path duration: menus/ifs count the average branch; jumps follow into the scene. */
+function estimateDuration(entry: string, members: Set<string>, labels: Map<string, LabelNode>): number {
+  const visiting = new Set<string>();
+  const memo = new Map<string, number>();
+
+  const label = (name: string): number => {
+    if (memo.has(name)) return memo.get(name)!;
+    if (visiting.has(name) || !members.has(name)) return 0;
+    visiting.add(name);
+    const node = labels.get(name)!;
+    const r = block(node.body);
+    let total = r.secs;
+    if (!r.stopped && node.fallNext && members.has(node.fallNext)) total += label(node.fallNext);
+    visiting.delete(name);
+    memo.set(name, total);
+    return total;
+  };
+
+  const block = (stmts: Stmt[]): { secs: number; stopped: boolean } => {
+    let secs = 0;
+    for (let i = 0; i < stmts.length; i++) {
+      const s = stmts[i];
+      switch (s.k) {
+        case 'say':
+          secs += readingSecs(s.what);
+          break;
+        case 'scene':
+          if (s.name || s.expr) secs += stmts[i + 1]?.k === 'say' ? 0 : SECS_PER_IMAGE;
+          break;
+        case 'user':
+          if (/^pause\b/.test(s.text)) secs += SECS_PER_PAUSE;
+          else if (findStringLiterals(s.text).some((l) => mediaKind(l.value) === 'video')) secs += SECS_PER_VIDEO;
+          break;
+        case 'python':
+          if (/renpy\.pause\s*\(/.test(s.source)) secs += SECS_PER_PAUSE;
+          if (/renpy\.movie_cutscene\s*\(/.test(s.source)) secs += SECS_PER_VIDEO;
+          break;
+        case 'menu': {
+          const parts = s.choices.map((c) => block(c.body));
+          secs += SECS_PER_MENU + (parts.length ? parts.reduce((a, p) => a + p.secs, 0) / parts.length : 0);
+          break;
+        }
+        case 'if': {
+          const parts = s.entries.map((e) => block(e.body));
+          secs += parts.length ? parts.reduce((a, p) => a + p.secs, 0) / parts.length : 0;
+          break;
+        }
+        case 'while':
+          secs += block(s.body).secs;
+          break;
+        case 'call':
+          secs += label(s.target);
+          break;
+        case 'jump':
+          return { secs: secs + label(s.target), stopped: true };
+        case 'label':
+          return { secs: secs + label(s.name), stopped: true };
+        case 'return':
+          return { secs, stopped: true };
+      }
+    }
+    return { secs, stopped: false };
+  };
+
+  return Math.round(label(entry));
+}
+
 // ─── Scenes ─────────────────────────────────────────────────────────────────
 
 interface SceneAcc {
-  id: string;
-  file: string;
-  line: number;
   speakerLines: Map<string, number>;
   appear: Set<string>;
   backgrounds: string[];
@@ -285,6 +508,7 @@ export interface SceneParseResult {
   scenes: SceneInfo[];
   labels: number;
   referenced: Set<string>;
+  programs: ScenePrograms;
 }
 
 export function buildScenes(files: ScriptFile[], assets: AssetLookup): SceneParseResult {
@@ -292,10 +516,18 @@ export function buildScenes(files: ScriptFile[], assets: AssetLookup): ScenePars
   for (const f of files) reg.collect(f.stmts);
   reg.finish();
 
-  const scenes: SceneInfo[] = [];
-  const seen = new Set<string>();
+  const labels = collectLabels(files);
+  const edges = collectEdges(labels);
+  const groups = mergeScenes(labels, edges);
+
   const charStats = new Map<string, CharacterInfo>();
-  let labels = 0;
+  const ensureChar = (id: string, name: string) => {
+    if (!charStats.has(id)) {
+      const def = reg.chars.get(id);
+      charStats.set(id, { id, name: def?.name ?? name, color: def?.color, sceneCount: 0, lineCount: 0 });
+    }
+    return charStats.get(id)!;
+  };
 
   const addMedia = (acc: SceneAcc, path: string | null, background = false) => {
     if (!path) return;
@@ -326,12 +558,11 @@ export function buildScenes(files: ScriptFile[], assets: AssetLookup): ScenePars
     }
   };
 
-  const walk = (acc: SceneAcc, body: Stmt[], file: string) => {
+  const walk = (acc: SceneAcc, body: Stmt[]) => {
     for (const s of body) {
       switch (s.k) {
         case 'label':
-          walkLabel(s, file);
-          break;
+          break; // nested labels are scenes (or scene parts) of their own
         case 'say': {
           const sp = reg.speaker(s.who);
           let id: string | null;
@@ -339,10 +570,7 @@ export function buildScenes(files: ScriptFile[], assets: AssetLookup): ScenePars
           else if (sp === null) id = null;
           else {
             id = sp.id;
-            if (!charStats.has(id)) {
-              const def = reg.chars.get(id);
-              charStats.set(id, { id, name: sp.name, color: def?.color, sceneCount: 0, lineCount: 0 });
-            }
+            ensureChar(id, sp.name);
           }
           acc.lastSpeaker = id;
           if (id) {
@@ -356,8 +584,15 @@ export function buildScenes(files: ScriptFile[], assets: AssetLookup): ScenePars
         case 'menu':
           for (const c of s.choices) {
             acc.dialogueCount++;
-            if (acc.dialogue.length < DIALOGUE_CAP) acc.dialogue.push({ who: null, what: stripTextTags(c), choice: true });
+            if (acc.dialogue.length < DIALOGUE_CAP) acc.dialogue.push({ who: null, what: stripTextTags(c.text), choice: true });
           }
+          for (const c of s.choices) walk(acc, c.body);
+          break;
+        case 'if':
+          for (const e of s.entries) walk(acc, e.body);
+          break;
+        case 'while':
+          walk(acc, s.body);
           break;
         case 'scene':
           if (s.name || s.expr) showByName(acc, s.name, s.expr, true);
@@ -375,12 +610,10 @@ export function buildScenes(files: ScriptFile[], assets: AssetLookup): ScenePars
     }
   };
 
-  const walkLabel = (label: Extract<Stmt, { k: 'label' }>, file: string) => {
-    labels++;
+  const scenes: SceneInfo[] = [];
+  for (const [entry, members] of groups) {
+    if (entry.startsWith('_') || ENGINE_LABELS.has(entry)) continue;
     const acc: SceneAcc = {
-      id: label.name,
-      file,
-      line: label.line,
       speakerLines: new Map(),
       appear: new Set(),
       backgrounds: [],
@@ -390,61 +623,61 @@ export function buildScenes(files: ScriptFile[], assets: AssetLookup): ScenePars
       dialogueCount: 0,
       lastSpeaker: null,
     };
-    walk(acc, label.body, file);
-    if (seen.has(acc.id) || acc.id.startsWith('_') || ENGINE_LABELS.has(acc.id)) return;
-    if (!acc.dialogueCount && !acc.images.length && !acc.videos.length) return;
-    seen.add(acc.id);
-    scenes.push(finishScene(acc));
-  };
+    for (const name of members) walk(acc, labels.get(name)!.body);
+    if (!acc.dialogueCount && !acc.images.length && !acc.videos.length) continue;
 
-  const finishScene = (acc: SceneAcc): SceneInfo => {
     const speakers = [...acc.speakerLines.entries()].sort((a, b) => b[1] - a[1]).map(([id]) => id);
     const characters = [...speakers];
     for (const id of acc.appear) if (!characters.includes(id)) characters.push(id);
-    for (const id of characters) {
-      if (!charStats.has(id)) {
-        const def = reg.chars.get(id);
-        charStats.set(id, { id, name: def?.name ?? id, color: def?.color, sceneCount: 0, lineCount: 0 });
-      }
-      charStats.get(id)!.sceneCount++;
-    }
-    const thumb = acc.videos[0]
+    for (const id of characters) ensureChar(id, id).sceneCount++;
+
+    const first = acc.videos[0]
       ? { path: acc.videos[0], kind: 'video' as const }
       : acc.backgrounds[0] ?? acc.images[0]
         ? { path: (acc.backgrounds[0] ?? acc.images[0])!, kind: 'image' as const }
         : null;
-    return {
-      id: acc.id,
-      title: formatTitle(acc.id),
-      file: acc.file,
-      line: acc.line,
+    const node = labels.get(entry)!;
+    scenes.push({
+      id: entry,
+      labels: members,
+      durationSec: estimateDuration(entry, new Set(members), labels),
+      title: formatTitle(entry),
+      file: node.file,
+      line: node.line,
       characters,
       speakers,
       backgrounds: acc.backgrounds,
       images: acc.images,
       videos: acc.videos,
-      thumbnail: thumb,
+      thumbnail: first,
       dialogue: acc.dialogue,
       dialogueCount: acc.dialogueCount,
-    };
-  };
-
-  for (const f of files) {
-    for (const s of f.stmts) if (s.k === 'label') walkLabel(s, f.path);
+    });
   }
-  // Script order: by file, then line (nested labels are finished before their parent).
-  const fileOrder = new Map(files.map((f, i) => [f.path, i]));
-  scenes.sort((a, b) => (fileOrder.get(a.file) ?? 0) - (fileOrder.get(b.file) ?? 0) || a.line - b.line);
+  scenes.sort((a, b) => labels.get(a.id)!.order - labels.get(b.id)!.order);
 
+  // ── Player programs for every label ──
+  const programs: ScenePrograms = { schema: 1, stage: reg.stage, labels: {}, speakers: {} };
   const referenced = new Set<string>();
   for (const sc of scenes) {
-    for (const p of sc.images) referenced.add(p);
-    for (const p of sc.videos) referenced.add(p);
+    sc.images.forEach((p) => referenced.add(p));
+    sc.videos.forEach((p) => referenced.add(p));
+  }
+  for (const l of labels.values()) {
+    const steps = compileLabel(l.body, reg);
+    programs.labels[l.name] = { file: l.file, steps, next: completes(l.body) ? l.fallNext : null };
+    programPaths(steps, referenced);
+    for (const s of steps) {
+      if (s.t === 'say' && s.who && !programs.speakers[s.who]) {
+        const c = charStats.get(s.who) ?? ensureChar(s.who, s.who.replace(/^name:/, ''));
+        programs.speakers[s.who] = c.color ? { name: c.name, color: c.color } : { name: c.name };
+      }
+    }
   }
 
   const characters = [...charStats.values()]
     .filter((c) => c.sceneCount > 0)
     .sort((a, b) => b.sceneCount - a.sceneCount || b.lineCount - a.lineCount || a.name.localeCompare(b.name));
 
-  return { characters, scenes, labels, referenced };
+  return { characters, scenes, labels: labels.size, referenced, programs };
 }

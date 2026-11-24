@@ -91,6 +91,35 @@ script = flat(
             ast.NewFancyNode(38, block=[ast.Say(39, who='lucy_alt', what='Inside an unknown node', with_=None)]),
         ]),
     )),
+    # ── Split scene: menu branches into labels that rejoin, then an explicit continuation ──
+    ast.Init(47, priority=0, block=[ast.Python(47, hide=False, store='store', code=ast.PyCode('gui.init(1280, 720)', 47))]),
+    ast.Label(50, name='w1_date', parameters=None, hide=False, block=flat(
+        ast.Scene(51, imspec=imspec('bg', 'beach'), layer='master'),
+        ast.Show(52, imspec=(('eileen', 'happy'), None, None, [PyExpr('left')], 'master', None, [])),
+        say(53, 'e', 'Where should we go?'),
+        ast.Call(54, label='common_phone', expression=False),
+        ast.Menu(55, items=[
+            ('Park', 'True', [ast.Jump(56, target='w1_date_park', expression=False)]),
+            ('Cafe', 'affection >= 5', [ast.Jump(57, target='w1_date_cafe', expression=False)]),
+        ]),
+    )),
+    ast.Label(60, name='w1_date_park', parameters=None, hide=False, block=flat(
+        say(61, 'e', 'The park is lovely.'), ast.Jump(62, target='w1_date_end', expression=False))),
+    ast.Label(63, name='w1_date_cafe', parameters=None, hide=False, block=flat(
+        ast.Hide(64, imspec=(('eileen',), None, None, [], 'master', None, [])),
+        ast.Scene(65, imspec=imspec('cg', 'kiss'), layer='master'),
+        ast.UserStatement(66, line='pause', parsed=None, block=[], subparses=[]),
+        ast.Jump(67, target='w1_date_end', expression=False))),
+    ast.Label(68, name='w1_date_end', parameters=None, hide=False, block=flat(
+        say(69, None, 'Later...'), ast.Jump(70, target='w1_date_part2', expression=False))),
+    ast.Label(71, name='w1_date_part2', parameters=None, hide=False, block=flat(
+        say(72, 'e', 'What a day.'), ast.Jump(73, target='w1_night', expression=False))),
+    ast.Label(74, name='w1_night', parameters=None, hide=False, block=flat(
+        ast.Scene(75, imspec=imspec('sunset'), layer='master'),
+        ast.Call(76, label='common_phone', expression=False),
+        say(77, 'l', 'Goodnight.'))),
+    ast.Label(78, name='common_phone', parameters=None, hide=False, block=flat(
+        say(79, None, 'Your phone buzzes.'), ast.Return(80, expression=None))),
     ast.Label(40, name='_private', parameters=None, hide=False, block=say(41, None, 'hidden')),
     ast.Label(42, name='main_menu', parameters=None, hide=False, block=say(43, None, 'engine')),
     ast.Label(44, name='empty_label', parameters=None, hide=False, block=[ast.Pass(45)]),
@@ -166,7 +195,41 @@ def write_rpa(path, files, key=0x1234abcd):
 
 write_rpa(os.path.join(OUT, 'scripts.rpa'), scripts)
 write_rpa(os.path.join(OUT, 'images.rpa'), media, key=0x0f0f0f0f)
+# ── Android APK, laid out like Ren'Py's packager: assets/x-game/ with x- on every component ──
+import io, zipfile
+def x_path(p):
+    return 'assets/x-game/' + '/'.join('x-' + part for part in p.split('/'))
+
+bonus_png = b'\x89PNG' + b'B' * 64
+gui_png = b'\x89PNG' + b'G' * 4000          # stored deflated inside the APK
+if MEDIA_DIR:  # real decodable images for UI tests
+    bonus_png = media['images/bg beach.png']
+    gui_png = media['images/lucy smile.png']
+nested = io.BytesIO()
+key = 0x0badcafe
+nested.write(b'\0' * 34)
+o = nested.tell(); nested.write(bonus_png)
+idx_off = nested.tell()
+nested.write(zlib.compress(pickle.dumps({'images/bonus.png': [(o ^ key, len(bonus_png) ^ key, b'')]}, protocol=2)))
+nested_bytes = bytearray(nested.getvalue())
+nested_bytes[:34] = (b'RPA-3.0 %016x %08x\n' % (idx_off, key))
+apk_only_rpy = '''label apk_bonus:
+    scene expression "images/bonus.png"
+    show expression "images/gui_deflated.png" at right
+    "From the APK"
+'''
+with zipfile.ZipFile(os.path.join(OUT, 'game.apk'), 'w') as z:
+    z.writestr('AndroidManifest.xml', b'\x03\x00' * 50, zipfile.ZIP_DEFLATED)
+    z.writestr('classes.dex', b'dex\n035' * 20, zipfile.ZIP_DEFLATED)
+    z.writestr('assets/x-renpy/x-common/x-00start.rpyc', b'engine file, must be ignored', zipfile.ZIP_DEFLATED)
+    for name, data in scripts.items():
+        z.writestr(x_path(name), data, zipfile.ZIP_DEFLATED)
+    z.writestr(x_path('apkonly.rpy'), apk_only_rpy.encode(), zipfile.ZIP_DEFLATED)
+    z.writestr(x_path('extras.rpa'), bytes(nested_bytes), zipfile.ZIP_STORED)
+    z.writestr(x_path('images/gui_deflated.png'), gui_png, zipfile.ZIP_DEFLATED)
+media_apk = {'images/bonus.png': bonus_png.hex(), 'images/gui_deflated.png': gui_png.hex()}
+
 with open(os.path.join(OUT, 'media.json'), 'w') as fh:
     import json
-    json.dump({k: v.hex() for k, v in media.items()}, fh)
+    json.dump({**{k: v.hex() for k, v in media.items()}, **media_apk}, fh)
 print('phase 2 fixtures written to', OUT)

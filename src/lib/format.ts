@@ -21,3 +21,13 @@ export function formatBytes(n: number): string {
   if (n >= 1048576) return `${(n / 1048576).toFixed(n >= 104857600 ? 0 : 1)} MB`;
   return `${Math.max(1, Math.round(n / 1024))} KB`;
 }
+
+/** ~6 min, ~1 h 20 min, <1 min */
+export function formatDuration(sec: number): string {
+  if (sec < 45) return '<1 min';
+  const min = Math.round(sec / 60);
+  if (min < 60) return `~${min} min`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return m ? `~${h} h ${m} min` : `~${h} h`;
+}

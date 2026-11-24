@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { assetBlob } from '../lib/archiveClient';
-import { formatBytes, tagColors } from '../lib/format';
+import { loadAssetBlob } from '../lib/archiveClient';
+import { formatBytes, formatDuration, tagColors } from '../lib/format';
 import type { AssetRef, CharacterInfo, GalleryIndex, SceneInfo } from '../types';
 import { FilePickerButton } from './FilePickerButton';
-import { ChevronLeftIcon, ChevronRightIcon, DownloadIcon, FolderOpenIcon, ShareIcon, XIcon } from './Icons';
+import { ChevronLeftIcon, ChevronRightIcon, DownloadIcon, FolderOpenIcon, PlayIcon, ShareIcon, XIcon } from './Icons';
 
 const baseName = (p: string) => p.slice(p.lastIndexOf('/') + 1);
 
@@ -24,6 +24,8 @@ export function ScenePreviewModal({
   characters,
   onClose,
   onAttachFiles,
+  onPlay,
+  playState,
 }: {
   scene: SceneInfo;
   index: GalleryIndex;
@@ -31,6 +33,9 @@ export function ScenePreviewModal({
   characters: Map<string, CharacterInfo>;
   onClose: () => void;
   onAttachFiles: (files: File[]) => boolean;
+  onPlay: () => void;
+  /** Whether the scene can be played back right now. */
+  playState: 'ready' | 'loading' | 'needs-files' | 'unavailable';
 }) {
   const items = useMemo<AssetRef[]>(
     () => [...scene.videos, ...scene.images].map((p) => index.assets[p]).filter((a): a is AssetRef => !!a),
@@ -50,13 +55,17 @@ export function ScenePreviewModal({
     setMediaError(null);
     if (!item || !files) return;
     let u: string | null = null;
-    try {
-      u = URL.createObjectURL(assetBlob(files, item));
-      setMedia({ path: item.path, url: u });
-    } catch (e) {
-      setMediaError((e as Error).message);
-    }
+    let cancelled = false;
+    loadAssetBlob(files, item).then(
+      (blob) => {
+        if (cancelled) return;
+        u = URL.createObjectURL(blob);
+        setMedia({ path: item.path, url: u });
+      },
+      (e) => !cancelled && setMediaError((e as Error).message),
+    );
     return () => {
+      cancelled = true;
       if (u) URL.revokeObjectURL(u);
     };
   }, [item, files]);
@@ -83,7 +92,7 @@ export function ScenePreviewModal({
 
   const share = async () => {
     if (!files || !item) return;
-    const file = new File([assetBlob(files, item)], baseName(item.path), { type: item.mime });
+    const file = new File([await loadAssetBlob(files, item)], baseName(item.path), { type: item.mime });
     try {
       if (navigator.canShare?.({ files: [file] })) await navigator.share({ files: [file], title: scene.title });
       else if (url) download(url, baseName(item.path));
@@ -101,9 +110,23 @@ export function ScenePreviewModal({
           <div className="min-w-0 flex-1">
             <h2 className="text-base leading-tight font-semibold">{scene.title}</h2>
             <p className="mt-0.5 truncate text-xs text-neutral-400">
-              {index.mode === 'folders' ? scene.file : `${scene.id} · ${scene.file}:${scene.line}`}
+              {index.mode === 'folders'
+                ? scene.file
+                : `${formatDuration(scene.durationSec)}${scene.labels.length > 1 ? ` · ${scene.labels.length} parts` : ''} · ${scene.file}:${scene.line}`}
             </p>
           </div>
+          {playState !== 'unavailable' && (
+            <button
+              type="button"
+              onClick={onPlay}
+              disabled={playState !== 'ready'}
+              className="flex shrink-0 items-center gap-1.5 rounded-full bg-rose-500 px-3.5 py-2 text-sm font-semibold text-white active:scale-95 disabled:opacity-40"
+              title={playState === 'needs-files' ? 'Select the archive files first' : undefined}
+            >
+              <PlayIcon width={14} height={14} />
+              {playState === 'loading' ? 'Loading…' : 'Play scene'}
+            </button>
+          )}
           <button type="button" onClick={onClose} className="grid size-8 shrink-0 place-items-center rounded-full bg-white/10" aria-label="Close">
             <XIcon width={16} height={16} />
           </button>

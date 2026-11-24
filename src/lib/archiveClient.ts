@@ -2,13 +2,15 @@
  * UI-thread side of the archive worker.
  *
  *   const job = indexFiles(files, (p) => setProgress(p));
- *   const index = await job.promise;      // job.cancel() to abort
- *   const blob = assetBlob(files, index.assets[path]);
+ *   const { index, programs } = await job.promise;   // job.cancel() to abort
+ *   const blob = await loadAssetBlob(files, index.assets[path]);
  */
 
-import type { AssetRef, GalleryIndex, IndexProgress } from '../types';
+import { inflateRaw } from 'pako';
+import type { AssetRef, IndexProgress } from '../types';
 import type { WorkerRequest, WorkerResponse } from '../workers/protocol';
-import { entryBlob } from './rpaParser';
+import type { IndexResult } from './indexer';
+import { entryBlob, readRange } from './rpaParser';
 
 export { cacheKeyFor } from './cacheKey';
 
@@ -28,7 +30,7 @@ export class IndexAbortedError extends Error {
 }
 
 export interface IndexJob {
-  promise: Promise<GalleryIndex>;
+  promise: Promise<IndexResult>;
   /** Stops immediately (terminates the worker, even mid-file). */
   cancel(): void;
 }
@@ -36,7 +38,7 @@ export interface IndexJob {
 export function indexFiles(files: File[], onProgress?: (p: IndexProgress) => void): IndexJob {
   const id = nextId++;
   const w = getWorker();
-  let settle: { resolve: (v: GalleryIndex) => void; reject: (e: unknown) => void } | null = null;
+  let settle: { resolve: (v: IndexResult) => void; reject: (e: unknown) => void } | null = null;
 
   const cleanup = () => {
     w.removeEventListener('message', onMessage);
@@ -48,7 +50,7 @@ export function indexFiles(files: File[], onProgress?: (p: IndexProgress) => voi
     if (msg.id !== id || !settle) return;
     if (msg.type === 'progress') onProgress?.(msg.progress);
     else if (msg.type === 'done') {
-      settle.resolve(msg.index);
+      settle.resolve({ index: msg.index, programs: msg.programs });
       cleanup();
     } else {
       settle.reject(msg.cancelled ? new IndexAbortedError() : new Error(msg.message));
@@ -62,7 +64,7 @@ export function indexFiles(files: File[], onProgress?: (p: IndexProgress) => voi
     worker = null;
   };
 
-  const promise = new Promise<GalleryIndex>((resolve, reject) => {
+  const promise = new Promise<IndexResult>((resolve, reject) => {
     settle = { resolve, reject };
     w.addEventListener('message', onMessage);
     w.addEventListener('error', onError);
@@ -84,12 +86,17 @@ export function indexFiles(files: File[], onProgress?: (p: IndexProgress) => voi
 }
 
 /**
- * Lazy Blob for an indexed asset, sliced from the user's original File.
- * `files` must be in the same order as when the index was built
- * (match by `index.sources[i].name` when restoring from cache).
+ * Blob for an indexed asset, read from the user's original File.
+ * Stored data is a lazy slice (nothing read until used); data that is
+ * deflate-compressed inside an APK is inflated here (small files only in practice).
+ * `files` must be in `index.sources` order.
  */
-export function assetBlob(files: Blob[], asset: AssetRef): Blob {
+export async function loadAssetBlob(files: Blob[], asset: AssetRef): Promise<Blob> {
   const file = files[asset.source];
   if (!file) throw new Error(`Source file #${asset.source} for ${asset.path} is not loaded`);
+  if (asset.deflated) {
+    const raw = await readRange(file, asset.offset, asset.offset + asset.deflated.compressedLength);
+    return new Blob([inflateRaw(raw)], { type: asset.mime });
+  }
   return entryBlob(file, asset, asset.mime);
 }

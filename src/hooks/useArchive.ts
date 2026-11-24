@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { cacheKeyFor, indexFiles, IndexAbortedError, type IndexJob } from '../lib/archiveClient';
-import { getCachedIndex, putCachedIndex } from '../lib/cache';
-import type { GalleryIndex, IndexProgress } from '../types';
+import { getCachedIndex, getCachedPrograms, putCachedIndex, putCachedPrograms } from '../lib/cache';
+import type { GalleryIndex, IndexProgress, ScenePrograms } from '../types';
 
 export type ArchiveState =
   | { status: 'idle' }
@@ -12,6 +12,8 @@ export type ArchiveState =
       /** Files in `index.sources` order, or null when opened from cache without them. */
       files: File[] | null;
       fromCache: boolean;
+      /** Scene player programs: undefined while loading from the cache, null when unavailable. */
+      programs: ScenePrograms | null | undefined;
     }
   | { status: 'error'; message: string };
 
@@ -33,6 +35,17 @@ export function useArchive() {
 
   useEffect(() => () => jobRef.current?.cancel(), []);
 
+  /** Programs can be large, so a cache hit shows the gallery first and loads them after. */
+  const loadPrograms = useCallback((index: GalleryIndex) => {
+    if (index.mode !== 'scripts') {
+      setState((s) => (s.status === 'ready' && s.index.key === index.key ? { ...s, programs: null } : s));
+      return;
+    }
+    void getCachedPrograms(index.key).then((programs) =>
+      setState((s) => (s.status === 'ready' && s.index.key === index.key ? { ...s, programs } : s)),
+    );
+  }, []);
+
   const open = useCallback(async (picked: File[]) => {
     if (!picked.length) return;
     jobRef.current?.cancel();
@@ -40,7 +53,8 @@ export function useArchive() {
 
     const cached = await getCachedIndex(key);
     if (cached) {
-      setState({ status: 'ready', index: cached, files: orderFiles(cached, picked), fromCache: true });
+      setState({ status: 'ready', index: cached, files: orderFiles(cached, picked), fromCache: true, programs: undefined });
+      loadPrograms(cached);
       return;
     }
 
@@ -50,25 +64,28 @@ export function useArchive() {
     );
     jobRef.current = job;
     try {
-      const index = await job.promise;
+      const { index, programs } = await job.promise;
       if (jobRef.current !== job) return;
       jobRef.current = null;
       void putCachedIndex(index);
-      setState({ status: 'ready', index, files: orderFiles(index, picked), fromCache: false });
+      if (programs) void putCachedPrograms(index.key, programs);
+      setState({ status: 'ready', index, files: orderFiles(index, picked), fromCache: false, programs });
     } catch (e) {
       if (jobRef.current !== job) return;
       jobRef.current = null;
       if (e instanceof IndexAbortedError) setState({ status: 'idle' });
       else setState({ status: 'error', message: (e as Error)?.message ?? String(e) });
     }
-  }, []);
+  }, [loadPrograms]);
 
   /** Opens a cached index without files (dialogue + cached thumbnails only). */
   const openCached = useCallback(async (key: string) => {
     const cached = await getCachedIndex(key);
-    if (cached) setState({ status: 'ready', index: cached, files: null, fromCache: true });
-    else setState({ status: 'error', message: 'That archive is no longer in the cache.' });
-  }, []);
+    if (cached) {
+      setState({ status: 'ready', index: cached, files: null, fromCache: true, programs: undefined });
+      loadPrograms(cached);
+    } else setState({ status: 'error', message: 'That archive is no longer in the cache.' });
+  }, [loadPrograms]);
 
   /** Re-attaches files to a cached index. Returns false if they don't match. */
   const attachFiles = useCallback(

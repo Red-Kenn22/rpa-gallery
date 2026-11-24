@@ -9,7 +9,7 @@
  * a time, and their ASTs are discarded as soon as they've been converted.
  */
 
-import type { AssetRef, GalleryIndex, IndexProgress, SourceInfo } from '../types';
+import type { AssetRef, GalleryIndex, IndexProgress, ScenePrograms, SourceInfo } from '../types';
 import { AstWalker } from './astWalker';
 import { cacheKeyFor } from './cacheKey';
 import { buildFolderGallery } from './folderGallery';
@@ -27,6 +27,7 @@ import {
   type RpaArchive,
   type RpaEntry,
 } from './rpaParser';
+import { apkGamePath, entryDataOffset, readZipDirectory, readZipEntry, type ZipEntry } from './zipReader';
 
 export interface SourceFile {
   name: string;
@@ -57,7 +58,15 @@ export interface IndexerHooks {
 interface AssetSlot {
   source: number;
   path: string;
+  /** For zip (APK) entries `entry.offset` is resolved lazily from `zip`. */
   entry: RpaEntry;
+  zip?: ZipEntry;
+}
+
+export interface IndexResult {
+  index: GalleryIndex;
+  /** Compiled labels for the scene player (null in folder mode). */
+  programs: ScenePrograms | null;
 }
 
 const COMPILED_EXT = new Set(['rpyc', 'rpymc']);
@@ -108,7 +117,7 @@ class AssetTable implements AssetLookup {
   }
 }
 
-export async function buildGalleryIndex(files: SourceFile[], hooks: IndexerHooks = {}): Promise<GalleryIndex> {
+export async function buildGalleryIndex(files: SourceFile[], hooks: IndexerHooks = {}): Promise<IndexResult> {
   const t0 = Date.now();
   const warnings: string[] = [];
   const warn = (msg: string) => {
@@ -134,11 +143,12 @@ export async function buildGalleryIndex(files: SourceFile[], hooks: IndexerHooks
     files.map((f, i) => ({ f, i })).filter(({ f }) => extensionOf(f.name) === 'rpi').map((x) => [stem(x.f.name), x]),
   );
   const parsed: { i: number; archive: RpaArchive }[] = [];
+  let archiveEntries = 0;
 
   // Loose files win over archives, as in Ren'Py.
   files.forEach((f, i) => {
     const ext = extensionOf(f.name);
-    if (ext === 'rpa' || ext === 'rpi') return;
+    if (ext === 'rpa' || ext === 'rpi' || ext === 'apk') return;
     sources[i].kind = COMPILED_EXT.has(ext) || SOURCE_EXT.has(ext) ? 'script' : 'loose';
     table.add({ source: i, path: f.name, entry: { offset: 0, length: f.size } });
   });
@@ -173,14 +183,62 @@ export async function buildGalleryIndex(files: SourceFile[], hooks: IndexerHooks
 
   // Ren'Py loads archives in name order; the first one to provide a path wins.
   parsed.sort((a, b) => files[a.i].name.localeCompare(files[b.i].name));
-  let archiveEntries = 0;
   for (const { i, archive } of parsed) {
     for (const path in archive.index) {
       table.add({ source: i, path, entry: archive.index[path] });
       archiveEntries++;
     }
   }
-  progress({ phase: 'reading-index', done: archiveIdx.length, total: archiveIdx.length });
+
+  // ── APKs: Ren'Py keeps game files under assets/x-game/ (x- on every component) ──
+  const apks = files.map((f, i) => ({ f, i })).filter(({ f }) => extensionOf(f.name) === 'apk');
+  for (const { f, i } of apks) {
+    checkCancelled();
+    progress({ phase: 'reading-index', done: archiveIdx.length, total: archiveIdx.length + apks.length, current: f.name });
+    sources[i].kind = 'apk';
+    try {
+      const entries = await readZipDirectory(f.blob);
+      let count = 0;
+      const nested: { path: string; zip: ZipEntry }[] = [];
+      for (const z of entries) {
+        const path = apkGamePath(z.name);
+        if (!path) continue;
+        if (extensionOf(path) === 'rpa') nested.push({ path, zip: z });
+        else {
+          table.add({ source: i, path, entry: { offset: -1, length: z.size }, zip: z });
+          count++;
+        }
+      }
+      // Archives packed inside the APK: readable in place when stored uncompressed.
+      for (const { path, zip } of nested.sort((a, b) => a.path.localeCompare(b.path))) {
+        if (zip.method !== 0) {
+          warn(`${f.name}: ${path} is compressed inside the APK and can't be read in place`);
+          continue;
+        }
+        try {
+          const base = await entryDataOffset(f.blob, zip);
+          const inner = await parseRpaIndex(f.blob.slice(base, base + zip.size));
+          for (const p in inner.index) {
+            const e = inner.index[p];
+            const shift = (s: RpaEntry): RpaEntry => ({ ...s, offset: s.offset + base });
+            const moved: RpaEntry = shift(e);
+            if (e.segments) moved.segments = e.segments.map(shift);
+            table.add({ source: i, path: p, entry: moved });
+            count++;
+          }
+        } catch (e) {
+          warn(`${f.name}: ${path}: ${(e as Error).message ?? e}`);
+        }
+      }
+      sources[i].entries = count;
+      archiveEntries += count;
+      if (!count) warn(`${f.name}: no Ren'Py game files found inside this APK`);
+    } catch (e) {
+      sources[i].entries = 0;
+      warn(`${f.name}: ${(e as Error).message ?? e}`);
+    }
+  }
+  progress({ phase: 'reading-index', done: archiveIdx.length + apks.length, total: archiveIdx.length + apks.length });
 
   // ── 2. Pick scripts: compiled first, sources as fallback ──
   const compiled = new Map<string, AssetSlot>();
@@ -203,7 +261,8 @@ export async function buildGalleryIndex(files: SourceFile[], hooks: IndexerHooks
   let scriptsFailed = 0;
 
   const parseOne = async (slot: AssetSlot): Promise<ScriptFile> => {
-    const bytes = await readEntry(files[slot.source].blob, slot.entry);
+    const blob = files[slot.source].blob;
+    const bytes = slot.zip ? await readZipEntry(blob, slot.zip) : await readEntry(blob, slot.entry);
     if (COMPILED_EXT.has(extensionOf(slot.path))) {
       const rpyc = decodeRpyc(bytes);
       const walker = new AstWalker();
@@ -249,14 +308,16 @@ export async function buildGalleryIndex(files: SourceFile[], hooks: IndexerHooks
     else if (k === 'audio') counts.audio++;
   }
 
-  let result: { characters: GalleryIndex['characters']; scenes: GalleryIndex['scenes']; labels: number; referenced: Set<string> } =
-    buildScenes(scripts, table);
+  const built = buildScenes(scripts, table);
+  let result: { characters: GalleryIndex['characters']; scenes: GalleryIndex['scenes']; labels: number; referenced: Set<string> } = built;
+  let programs: ScenePrograms | null = built.programs;
   let mode: GalleryIndex['mode'] = 'scripts';
   if (!result.scenes.length) {
     // No usable scripts: fall back to browsing the archive by folder.
     const folders = buildFolderGallery(table.paths());
     if (folders.scenes.length) {
       mode = 'folders';
+      programs = null;
       result = { ...folders, labels: result.labels };
     }
   }
@@ -274,14 +335,24 @@ export async function buildGalleryIndex(files: SourceFile[], hooks: IndexerHooks
       mime: guessMimeType(slot.path),
       kind: mediaKind(slot.path),
     };
+    if (slot.zip) {
+      try {
+        ref.offset = await entryDataOffset(files[slot.source].blob, slot.zip);
+      } catch (e) {
+        warn(`${slot.path}: ${(e as Error).message ?? e}`);
+        continue;
+      }
+      if (slot.zip.method === 8) ref.deflated = { compressedLength: slot.zip.compressedSize };
+      else if (slot.zip.method !== 0) continue;
+    }
     if (entry.prefix) ref.prefix = entry.prefix;
     if (entry.segments) ref.segments = entry.segments;
     assets[path] = ref;
   }
   progress({ phase: 'building', done: 1, total: 1 });
 
-  return {
-    schema: 2,
+  const index: GalleryIndex = {
+    schema: 3,
     mode,
     key: cacheKeyFor(files),
     sources,
@@ -300,4 +371,5 @@ export async function buildGalleryIndex(files: SourceFile[], hooks: IndexerHooks
     },
     warnings,
   };
+  return { index, programs };
 }

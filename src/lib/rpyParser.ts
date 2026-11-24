@@ -149,26 +149,54 @@ function parseSay(text: string): { who: string | null; what: string } | null {
   return null;
 }
 
-function parseImageClause(rest: string): { name: string[]; expr: string | null } {
+function parseAt(r: string): string[] {
+  const m = /(?:^|\s)at\s+([\s\S]+?)(?=\s+(?:as|behind|onlayer|with|zorder)\s|$)/.exec(r);
+  return m ? m[1].split(',').map((x) => x.trim()).filter(Boolean) : [];
+}
+
+function parseImageClause(rest: string): { name: string[]; expr: string | null; at: string[] } {
   const r = rest.replace(/:$/, '').trim();
+  const at = parseAt(r);
   const exprMatch = /^expression\s+([\s\S]+?)(?:\s+(?:at|as|behind|onlayer|with|zorder)\s[\s\S]*)?$/.exec(r);
-  if (exprMatch) return { name: [], expr: exprMatch[1].trim() };
+  if (exprMatch) return { name: [], expr: exprMatch[1].trim(), at };
   const name: string[] = [];
   for (const tok of r.split(/\s+/)) {
     if (!tok || CLAUSE_WORDS.has(tok)) break;
     name.push(tok);
   }
-  return { name, expr: null };
+  return { name, expr: null, at };
 }
+
+const headOf = (t: string) => /^[A-Za-z_]+/.exec(t)?.[0] ?? '';
+const condOf = (t: string) => t.replace(/^(?:if|elif|while)\s+/, '').replace(/:\s*$/, '').trim();
 
 class RpyConverter {
   convert(lines: Line[], out: Stmt[]): void {
-    for (const l of lines) this.line(l, out);
+    for (let i = 0; i < lines.length; i++) {
+      const l = lines[i];
+      if (headOf(l.text) === 'if') {
+        const entries = [{ cond: condOf(l.text), body: this.sub(l.children) }];
+        while (i + 1 < lines.length && /^(?:elif|else)\b/.test(lines[i + 1].text)) {
+          i++;
+          const t = lines[i].text;
+          entries.push({ cond: t.startsWith('else') ? 'True' : condOf(t), body: this.sub(lines[i].children) });
+        }
+        out.push({ k: 'if', entries, line: l.line });
+        continue;
+      }
+      this.line(l, out);
+    }
+  }
+
+  private sub(lines: Line[]): Stmt[] {
+    const out: Stmt[] = [];
+    this.convert(lines, out);
+    return out;
   }
 
   private line(l: Line, out: Stmt[]): void {
     const t = l.text;
-    const head = /^[A-Za-z_$]+/.exec(t)?.[0] ?? (t.startsWith('$') ? '$' : '');
+    const head = headOf(t);
 
     if (t.startsWith('$')) {
       out.push({ k: 'python', source: t.slice(1).trim(), line: l.line });
@@ -218,18 +246,31 @@ class RpyConverter {
       case 'scene': {
         const rest = t.slice(5).trim();
         if (/^(?:onlayer\b|with\b|:)/.test(rest) || !rest) {
-          out.push({ k: 'scene', name: null, expr: null, line: l.line });
+          out.push({ k: 'scene', name: null, expr: null, at: [], line: l.line });
           return;
         }
         const spec = parseImageClause(rest);
-        out.push({ k: 'scene', name: spec.name.length ? spec.name : null, expr: spec.expr, line: l.line });
+        out.push({ k: 'scene', name: spec.name.length ? spec.name : null, expr: spec.expr, at: spec.at, line: l.line });
         return;
       }
+      case 'hide': {
+        const rest = t.slice(4).trim();
+        if (/^(?:screen|layer)\b/.test(rest)) return;
+        const name = parseImageClause(rest).name;
+        if (name.length) out.push({ k: 'hide', name, line: l.line });
+        return;
+      }
+      case 'return':
+        out.push({ k: 'return', line: l.line });
+        return;
+      case 'pause':
+        out.push({ k: 'user', text: t, line: l.line });
+        return;
       case 'show': {
         const rest = t.slice(4).trim();
         if (/^(?:screen|layer)\b/.test(rest)) return;
         const spec = parseImageClause(rest);
-        if (spec.name.length || spec.expr) out.push({ k: 'show', name: spec.name, expr: spec.expr, line: l.line });
+        if (spec.name.length || spec.expr) out.push({ k: 'show', name: spec.name, expr: spec.expr, at: spec.at, line: l.line });
         return;
       }
       case 'play':
@@ -242,27 +283,27 @@ class RpyConverter {
         if (m) out.push({ k: m[1] as 'jump' | 'call', target: m[2], line: l.line });
         return;
       }
-      case 'if':
       case 'elif':
       case 'else':
-      case 'while':
-      case 'for':
+        // orphaned (handled by convert); keep the body
         this.convert(l.children, out);
         return;
+      case 'while':
+      case 'for':
+        out.push({ k: 'while', cond: condOf(t), body: this.sub(l.children), line: l.line });
+        return;
       case 'menu': {
-        const choices: string[] = [];
-        const inner: Stmt[] = [];
+        const choices: { text: string; cond: string | null; body: Stmt[] }[] = [];
         for (const c of l.children) {
           const lit = leadingLiteral(c.text);
           if (lit && c.children.length) {
-            choices.push(lit.value);
-            this.convert(c.children, inner);
+            const cond = /^if\s+([\s\S]+?)\s*:?$/.exec(lit.rest)?.[1] ?? null;
+            choices.push({ text: lit.value, cond, body: this.sub(c.children) });
           } else {
             this.line(c, out); // narration caption (shown before the choices), `set`, etc.
           }
         }
         if (choices.length) out.push({ k: 'menu', choices, line: l.line });
-        out.push(...inner);
         return;
       }
       case 'translate': {

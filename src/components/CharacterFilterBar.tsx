@@ -1,6 +1,35 @@
 import { normalizeHex } from '../lib/format';
 import type { CharacterInfo } from '../types';
 
+export type SortMode = 'story' | 'longest' | 'shortest';
+
+export function SortBar({ value, onChange, count }: { value: SortMode; onChange: (v: SortMode) => void; count: number }) {
+  const opts: [SortMode, string][] = [
+    ['story', 'Story order'],
+    ['longest', 'Longest'],
+    ['shortest', 'Shortest'],
+  ];
+  return (
+    <div className="mb-3 flex items-center justify-between gap-3">
+      <span className="text-xs text-neutral-500">{count.toLocaleString()} shown</span>
+      <div role="radiogroup" aria-label="Sort scenes" className="flex rounded-full bg-white/[0.07] p-0.5 ring-1 ring-white/5">
+        {opts.map(([v, label]) => (
+          <button
+            key={v}
+            type="button"
+            role="radio"
+            aria-checked={value === v}
+            onClick={() => onChange(v)}
+            className={`rounded-full px-3 py-1 text-xs font-medium transition ${value === v ? 'bg-white text-neutral-950' : 'text-neutral-300'}`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function CharacterFilterBar({
   characters,
   selected,

@@ -25,7 +25,7 @@ scope.addEventListener('message', async (ev) => {
   let lastProgress = 0;
 
   try {
-    const index = await buildGalleryIndex(files.map(sourceFromFile), {
+    const { index, programs } = await buildGalleryIndex(files.map(sourceFromFile), {
       onProgress(progress) {
         const now = Date.now();
         const final = progress.done === progress.total;
@@ -34,7 +34,7 @@ scope.addEventListener('message', async (ev) => {
         scope.postMessage({ type: 'progress', id, progress });
       },
     });
-    scope.postMessage({ type: 'done', id, index });
+    scope.postMessage({ type: 'done', id, index, programs });
   } catch (e) {
     scope.postMessage({
       type: 'error',

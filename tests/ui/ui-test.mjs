@@ -54,17 +54,18 @@ check('welcome renders', true);
 const t0 = Date.now();
 await page.locator('input[type=file]').first().setInputFiles(files);
 await cards.first().waitFor({ timeout: 20000 });
-check('indexed in worker', (await cards.count()) === 6, `cards=${await cards.count()}`);
-check('subtitle', /6 scenes · 6 characters/.test(await page.locator('header').innerText()));
+check('indexed in worker', (await cards.count()) === 8, `cards=${await cards.count()}`);
+check('subtitle', /8 scenes · 6 characters/.test(await page.locator('header').innerText()), await page.locator('header').innerText());
 console.log(`  indexing + first paint: ${Date.now() - t0} ms`);
 
-// Thumbnails: every card has media in this fixture (3 come from video frames).
+// Thumbnails: 7 of the 8 scenes have media (common_phone is text only); some come from video frames.
 await page.waitForFunction(() => {
   const imgs = [...document.querySelectorAll('[data-scene] img')];
-  return imgs.length === 6 && imgs.every((i) => i.complete && i.naturalWidth > 0);
+  return imgs.length === 7 && imgs.every((i) => i.complete && i.naturalWidth > 0);
 }, null, { timeout: 30000 }).catch(() => {});
 const thumbCount = await page.locator('[data-scene] img').count();
-check('all thumbnails generated', thumbCount === 6, `thumbs=${thumbCount}`);
+check('all thumbnails generated', thumbCount === 7, `thumbs=${thumbCount}`);
+check('duration badge', /~?\d+ min|<1 min/.test(await page.locator('[data-scene="w1_date"]').innerText()));
 const startThumb = await page.locator('[data-scene="start"] img').getAttribute('src');
 check('video thumbnail is a JPEG frame', startThumb?.startsWith('data:image/jpeg') ?? false);
 check('badges', (await page.locator('[data-scene="start"]').innerText()).includes('VIDEO') && (await page.locator('[data-scene="chapter_two"]').innerText()).includes('1 IMAGE'));
@@ -72,16 +73,23 @@ await page.screenshot({ path: join(shots, '2-grid.png') });
 
 // ── Character filter ──
 await page.getByRole('button', { name: /^Lucy\b/ }).first().click();
-check('filter by Lucy', (await cards.count()) === 1 && (await cards.first().getAttribute('data-scene')) === 'beach', `cards=${await cards.count()}`);
+check('filter by Lucy', (await cards.count()) === 2 && (await cards.first().getAttribute('data-scene')) === 'beach', `cards=${await cards.count()}`);
 await page.screenshot({ path: join(shots, '3-filter.png') });
 await page.getByRole('button', { name: /^All\b/ }).click();
-check('filter cleared', (await cards.count()) === 6);
+check('filter cleared', (await cards.count()) === 8);
+
+// ── Sort by estimated time ──
+await page.getByRole('radio', { name: 'Longest' }).click();
+check('sort longest first', (await cards.first().getAttribute('data-scene')) === 'beach', await cards.first().getAttribute('data-scene'));
+await page.getByRole('radio', { name: 'Shortest' }).click();
+check('sort shortest first', (await cards.first().getAttribute('data-scene')) === 'common_phone', await cards.first().getAttribute('data-scene'));
+await page.getByRole('radio', { name: 'Story order' }).click();
 
 // ── Search ──
 await page.getByPlaceholder('Search scenes or characters').fill('jun');
 check('search by character name', (await cards.count()) === 1 && (await cards.first().getAttribute('data-scene')) === 'chapter_two');
 await page.getByPlaceholder('Search scenes or characters').fill('beach');
-check('search by title', (await cards.count()) === 2, `cards=${await cards.count()}`);
+check('search by title', (await cards.count()) === 1, `cards=${await cards.count()}`);
 await page.getByLabel('Clear search').click();
 
 // ── Preview sheet: video, swipe to images, save ──
@@ -115,7 +123,7 @@ await page.screenshot({ path: join(shots, '5-preview-image.png') });
 // Back button closes the sheet, not the app
 await page.goBack();
 await dialog.waitFor({ state: 'detached' });
-check('back button closes preview', (await page.getByRole('dialog').count()) === 0 && (await cards.count()) === 6);
+check('back button closes preview', (await page.getByRole('dialog').count()) === 0 && (await cards.count()) === 8);
 await page.waitForTimeout(300);
 const live = await page.evaluate(() => window.__liveUrls());
 check('all object URLs revoked', live === 0, `live=${live}`);
@@ -136,10 +144,11 @@ await page.getByText('Recently opened').waitFor();
 await page.locator('main li button').first().click();
 await cards.first().waitFor();
 check('cache-only banner', (await page.getByText('Opened from the cache').count()) === 1);
-await page.waitForFunction(() => document.querySelectorAll('[data-scene] img').length === 6, null, { timeout: 10000 }).catch(() => {});
-check('thumbnails from IndexedDB without files', (await page.locator('[data-scene] img').count()) === 6);
+await page.waitForFunction(() => document.querySelectorAll('[data-scene] img').length === 7, null, { timeout: 10000 }).catch(() => {});
+check('thumbnails from IndexedDB without files', (await page.locator('[data-scene] img').count()) === 7);
 await page.locator('[data-scene="start"]').click();
 check('preview asks for files', (await page.getByRole('dialog').innerText()).includes('Select files'));
+check('play needs files', await page.getByRole('dialog').getByRole('button', { name: /Play scene/ }).isDisabled());
 await page.screenshot({ path: join(shots, '7-cache-only.png') });
 
 // ── Images-only archive (scripts kept loose elsewhere): folder mode + guidance ──
@@ -155,6 +164,71 @@ await page.screenshot({ path: join(shots, '8-folder-mode.png') });
 await page.locator('[data-scene="video"]').click();
 check('folder preview has no dialogue list', (await page.getByRole('dialog').innerText()).includes('Folder view: 0 images, 3 videos'));
 await page.keyboard.press('Escape');
+
+// ── APK + archive.rpa: scripts from the APK, media from the archive ──
+await page.locator('input[type=file]').first().setInputFiles([join(fixtures, 'game.apk'), join(fixtures, 'images.rpa')]);
+await page.locator('[data-scene="apk_bonus"]').waitFor({ timeout: 20000 });
+check('apk opens with scenes', (await cards.count()) === 9, `cards=${await cards.count()}`);
+await page.waitForFunction(() => { const i = document.querySelector('[data-scene="apk_bonus"] img'); return i && i.naturalWidth > 0; }, null, { timeout: 15000 }).catch(() => {});
+check('thumbnail from image inside APK', (await page.locator('[data-scene="apk_bonus"] img').count()) === 1);
+
+// ── Scene player ──
+const player = page.locator('[data-player]');
+const sayText = () => player.locator('[data-say]').innerText().catch(() => null);
+const tap = async () => { await player.click({ position: { x: 200, y: 200 } }); await page.waitForTimeout(80); };
+await page.setViewportSize({ width: 844, height: 390 }); // landscape phone
+await page.locator('[data-scene="w1_date"]').click();
+await page.getByRole('dialog').getByRole('button', { name: /Play scene/ }).click();
+await player.waitFor();
+await page.waitForFunction(() => [...document.querySelectorAll('[data-player] img')].some((i) => i.naturalWidth > 0 && getComputedStyle(i).opacity !== '0'), null, { timeout: 10000 }).catch(() => {});
+check('player shows first line', (await sayText()) === 'Where should we go?', String(await sayText()));
+check('player speaker name', (await player.locator('[data-speaker]').innerText()) === 'Eileen');
+const layout = await page.evaluate(() => [...document.querySelectorAll('[data-player] img')].map((i) => { const r = i.getBoundingClientRect(); return [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)]; }));
+check('stage fills the landscape screen (1280×720 → 693×390)', layout.length === 2 && layout[0][2] === 693 && layout[0][3] === 390, JSON.stringify(layout));
+check('sprite placed at left', layout[1]?.[0] === layout[0]?.[0], JSON.stringify(layout));
+await page.screenshot({ path: join(shots, '9-player.png') });
+await tap();
+check('player follows call into shared label', (await sayText()) === 'Your phone buzzes.', String(await sayText()));
+await tap();
+check('player menu', (await player.locator('[data-choice]').count()) === 2 && (await player.innerText()).includes('if affection >= 5'));
+await page.screenshot({ path: join(shots, '10-player-menu.png') });
+await player.locator('[data-choice]').nth(1).click();
+await page.waitForTimeout(150);
+check('image-only beat waits for a tap', (await player.locator('[data-say]').count()) === 0);
+await tap();
+check('rejoin label', (await sayText()) === 'Later...', String(await sayText()));
+await player.getByLabel('Back one line').click();
+check('back one line', (await player.locator('[data-say]').count()) === 0);
+await tap();
+await tap();
+check('continuation label', (await sayText()) === 'What a day.', String(await sayText()));
+await tap();
+await player.locator('[data-ended]').waitFor();
+check('end of scene offers next scene', (await player.locator('[data-ended]').innerText()).includes('Continue: W 1 Night'));
+await page.screenshot({ path: join(shots, '11-player-end.png') });
+await player.getByRole('button', { name: /Continue: W 1 Night/ }).click();
+await page.waitForTimeout(150);
+check('continues into the next scene', (await sayText()) === 'Your phone buzzes.', String(await sayText()));
+await player.getByLabel('Close player').click();
+await player.waitFor({ state: 'detached' });
+check('closing the player returns to its scene', (await page.getByRole('dialog').innerText()).includes('W 1 Night'));
+await page.goBack();
+await page.getByRole('dialog').waitFor({ state: 'detached' });
+await page.waitForTimeout(300);
+const liveAfterPlayer = await page.evaluate(() => window.__liveUrls());
+check('player revokes its object URLs', liveAfterPlayer === 0, `live=${liveAfterPlayer}`);
+
+// Looping Movie background + cutscene + Android back closes the player
+await page.locator('[data-scene="start"]').click();
+await page.getByRole('dialog').getByRole('button', { name: /Play scene/ }).click();
+await player.waitFor();
+await page.waitForFunction(() => { const v = document.querySelector('[data-player] video'); return v && v.readyState >= 2; }, null, { timeout: 10000 }).catch(() => {});
+check('Movie image plays as looping background', await page.evaluate(() => { const v = document.querySelector('[data-player] video'); return !!v && v.loop && v.readyState >= 2; }));
+await page.goBack();
+await player.waitFor({ state: 'detached' });
+check('back button closes the player first', (await page.getByRole('dialog').count()) === 1);
+await page.keyboard.press('Escape');
+await page.setViewportSize({ width: 390, height: 844 });
 
 check('no console errors', errors.length === 0, errors.join(' | ').slice(0, 400));
 

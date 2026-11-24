@@ -1,9 +1,9 @@
 import { memo, useRef } from 'react';
 import { useInView } from '../hooks/useInView';
 import { useThumbnail } from '../hooks/useThumbnail';
-import { tagColors } from '../lib/format';
+import { formatDuration, tagColors } from '../lib/format';
 import type { CharacterInfo, GalleryIndex, SceneInfo } from '../types';
-import { ChatIcon, ImageIcon, PlayIcon } from './Icons';
+import { ChatIcon, ClockIcon, ImageIcon, PlayIcon } from './Icons';
 
 export function mediaBadge(scene: SceneInfo): { label: string; kind: 'video' | 'image' | 'text' } {
   if (scene.videos.length) return { label: scene.videos.length > 1 ? `${scene.videos.length} VIDEOS` : 'VIDEO', kind: 'video' };
@@ -64,10 +64,10 @@ function SceneCardImpl({
           {badge.kind === 'video' && <PlayIcon width={9} height={9} />}
           {badge.label}
         </span>
-        {scene.dialogueCount > 0 && (
+        {scene.durationSec > 0 && (
           <span className="absolute right-2 bottom-2 flex items-center gap-1 rounded-md bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-neutral-200 backdrop-blur">
-            <ChatIcon width={10} height={10} />
-            {scene.dialogueCount}
+            <ClockIcon width={10} height={10} />
+            {formatDuration(scene.durationSec)}
           </span>
         )}
       </div>

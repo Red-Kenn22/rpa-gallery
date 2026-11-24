@@ -5,17 +5,19 @@
  *              source, sorted, "|"-joined), so reopening the same archives is
  *              instant.
  *   thumbs   – JPEG data URLs keyed by `${indexKey}::${assetPath}`.
+ *   programs – compiled scene-player programs, keyed by index key (loaded lazily).
  *
  * Archive bytes are never stored. Every call degrades to a no-op when
  * IndexedDB is unavailable (some private-browsing modes).
  */
 
-import type { GalleryIndex } from '../types';
+import type { GalleryIndex, ScenePrograms } from '../types';
 
 const DB_NAME = 'rpa-gallery';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const INDEXES = 'indexes';
 const THUMBS = 'thumbs';
+const PROGRAMS = 'programs';
 
 export interface CachedIndexSummary {
   key: string;
@@ -47,6 +49,7 @@ function openDb(): Promise<IDBDatabase | null> {
       const db = req.result;
       if (!db.objectStoreNames.contains(INDEXES)) db.createObjectStore(INDEXES, { keyPath: 'key' });
       if (!db.objectStoreNames.contains(THUMBS)) db.createObjectStore(THUMBS);
+      if (!db.objectStoreNames.contains(PROGRAMS)) db.createObjectStore(PROGRAMS);
     };
     req.onsuccess = () => {
       const db = req.result;
@@ -98,7 +101,7 @@ async function withStore<T>(
 
 export async function getCachedIndex(key: string): Promise<GalleryIndex | null> {
   const rec = await withStore<IndexRecord | undefined>(INDEXES, 'readonly', (s) => s.get(key));
-  return rec?.index?.schema === 2 ? rec.index : null;
+  return rec?.index?.schema === 3 ? rec.index : null;
 }
 
 export async function putCachedIndex(index: GalleryIndex): Promise<void> {
@@ -111,7 +114,7 @@ export async function putCachedIndex(index: GalleryIndex): Promise<void> {
 export async function listCachedIndexes(): Promise<CachedIndexSummary[]> {
   const all = (await withStore<IndexRecord[]>(INDEXES, 'readonly', (s) => s.getAll())) ?? [];
   return all
-    .filter((r) => r.index?.schema === 2)
+    .filter((r) => r.index?.schema === 3)
     .map((r) => ({
       key: r.key,
       savedAt: r.savedAt,
@@ -124,11 +127,13 @@ export async function listCachedIndexes(): Promise<CachedIndexSummary[]> {
 
 export async function deleteCachedIndex(key: string): Promise<void> {
   await withStore(INDEXES, 'readwrite', (s) => s.delete(key));
+  await withStore(PROGRAMS, 'readwrite', (s) => s.delete(key));
   await withStore(THUMBS, 'readwrite', (s) => s.delete(IDBKeyRange.bound(`${key}::`, `${key}::￿`)));
 }
 
 export async function clearCache(): Promise<void> {
   await withStore(INDEXES, 'readwrite', (s) => s.clear());
+  await withStore(PROGRAMS, 'readwrite', (s) => s.clear());
   await withStore(THUMBS, 'readwrite', (s) => s.clear());
 }
 
@@ -143,4 +148,15 @@ export async function getCachedThumb(indexKey: string, path: string): Promise<st
 
 export async function putCachedThumb(indexKey: string, path: string, dataUrl: string): Promise<void> {
   await withStore(THUMBS, 'readwrite', (s) => s.put(dataUrl, thumbKey(indexKey, path)));
+}
+
+// ─── Scene player programs ──────────────────────────────────────────────────
+
+export async function getCachedPrograms(indexKey: string): Promise<ScenePrograms | null> {
+  const v = await withStore<ScenePrograms | undefined>(PROGRAMS, 'readonly', (s) => s.get(indexKey));
+  return v?.schema === 1 ? v : null;
+}
+
+export async function putCachedPrograms(indexKey: string, programs: ScenePrograms): Promise<void> {
+  await withStore(PROGRAMS, 'readwrite', (s) => s.put(programs, indexKey));
 }
