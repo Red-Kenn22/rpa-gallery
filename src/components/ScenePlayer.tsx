@@ -5,7 +5,7 @@ import { formatDuration, normalizeHex } from '../lib/format';
 import { mediaKind } from '../lib/media';
 import { PlayerEngine, type Layer } from '../lib/playerEngine';
 import type { GalleryIndex, ScenePrograms, SceneInfo } from '../types';
-import { ChevronLeftIcon, DownloadIcon, EyeOffIcon, ForkNextIcon, ForkPrevIcon, ListIcon, MoreIcon, SoundOffIcon, SoundOnIcon, XIcon } from './Icons';
+import { ChevronLeftIcon, DownloadIcon, EyeOffIcon, ForkNextIcon, ForkPrevIcon, ImageIcon, ListIcon, MoreIcon, SoundOffIcon, SoundOnIcon, XIcon } from './Icons';
 import { ChoiceDetails } from './player/ChoiceDetails';
 import { HistoryPanel } from './player/HistoryPanel';
 import { Scrubber } from './player/Scrubber';
@@ -113,9 +113,11 @@ export function ScenePlayer({
   programs,
   files,
   sceneForLabel,
+  onSetPortrait,
   onClose,
   onContinue,
 }: {
+  onSetPortrait?: (charId: string, path: string) => void;
   scene: SceneInfo;
   index: GalleryIndex;
   programs: ScenePrograms;
@@ -344,6 +346,9 @@ export function ScenePlayer({
   };
 
   const speaker = v.say?.who ? programs.speakers[v.say.who] : undefined;
+  // "Use as portrait" targets whoever is speaking (or spoke last), if they're a gallery character.
+  const lastWho = v.say?.who ?? engine.previousLine?.who ?? null;
+  const portraitTarget = lastWho ? index.characters.find((c) => c.id === lastWho) : undefined;
   const next = v.ended?.nextLabel ? sceneForLabel(v.ended.nextLabel) : undefined;
   const frameImg = v.video?.img ?? [...v.layers].reverse().find((l) => l.img)?.img ?? v.bg?.img;
   const frameUrl = media.url(frameImg);
@@ -498,6 +503,19 @@ export function ScenePlayer({
                   <span>Choice hints</span>
                   <span className="text-xs text-neutral-400">{choiceHints ? 'on' : 'off'}</span>
                 </button>
+                {onSetPortrait && portraitTarget && frameImg && mediaKind(frameImg) === 'image' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onSetPortrait(portraitTarget.id, frameImg);
+                      setSettingsMenu(false);
+                    }}
+                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left hover:bg-white/5"
+                    data-use-portrait
+                  >
+                    <ImageIcon width={15} height={15} /> Use as {portraitTarget.name}'s portrait
+                  </button>
+                )}
                 {frameUrl && frameImg && (
                   <button
                     type="button"

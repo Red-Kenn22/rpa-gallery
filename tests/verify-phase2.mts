@@ -36,7 +36,7 @@ const { index, programs } = await buildGalleryIndex(sources);
 const scene = (id: string) => index.scenes.find((s) => s.id === id) as SceneInfo;
 
 // ── sources & stats ──
-eq('source kinds', index.sources.map((s) => [s.kind, s.version, s.entries]), [['rpa', 'RPA-3.0', 6], ['rpa', 'RPA-3.0', 11]]);
+eq('source kinds', index.sources.map((s) => [s.kind, s.version, s.entries]), [['rpa', 'RPA-3.0', 6], ['rpa', 'RPA-3.0', 12]]);
 eq('cache key', index.key, [...sources].sort((a, b) => a.name.localeCompare(b.name)).map((s) => `${s.name}_${s.size}_1700000000000`).join('|'));
 eq('scripts parsed (tl/ skipped, broken → .rpy)', [index.stats.scriptsParsed, index.stats.scriptsFailed], [4, 0]);
 check('warns about broken.rpyc fallback', index.warnings.some((w) => w.startsWith('broken.rpyc') && w.includes('broken.rpy')));
@@ -123,6 +123,13 @@ eq('if → branch with else', (programs!.labels['beach'].steps.find((s) => s.t =
 check('character sprites referenced for the player', !!index.assets['images/sprites/eileen_happy.png']);
 eq('speaker table', programs?.speakers.e, { name: 'Eileen', color: '#c8ffc8' });
 
+// ── portraits ──
+eq('portrait: named gallery file wins', chars.l?.portrait, 'images/gallery/lucy.png');
+eq('portrait: sprite via image= tag', chars.e?.portrait, 'images/sprites/eileen_happy.png');
+eq('portrait: fallback to a scene image', chars.j?.portrait, 'images/bg beach.png');
+check('portrait candidates include the sprite for Lucy', !!chars.l?.portraitCandidates?.includes('images/lucy smile.png'));
+check('portraits are in the asset table', !!index.assets['images/gallery/lucy.png'] && !!index.assets['images/sprites/eileen_happy.png']);
+
 // ── Ren'Py 6 file: literal speaker merges into e, 3-tuple imspec ──
 eq('old rpyc backgrounds', scene('chapter_two').backgrounds, ['images/bg beach.png']);
 eq('old rpyc speakers', scene('chapter_two').speakers, ['e', 'j']);
@@ -141,7 +148,8 @@ for (const lp of Object.values(programs!.labels)) for (const st of lp.steps) {
   if ((st.t === 'bg' || st.t === 'show' || st.t === 'video') && st.img) referenced.add(st.img);
   if (st.t === 'audio') st.files.forEach((f) => referenced.add(f));
 }
-eq('asset table = scene media + player images + audio', Object.keys(index.assets).sort(), [...referenced].sort());
+for (const c of index.characters) c.portraitCandidates?.forEach((p) => referenced.add(p));
+eq('asset table = scene media + player images + audio + portraits', Object.keys(index.assets).sort(), [...referenced].sort());
 check('music referenced for the player', !!index.assets['audio/theme.ogg']);
 for (const [path, ref] of Object.entries(index.assets)) {
   const bytes = Buffer.from(await (await loadAssetBlob(sources.map((s) => s.blob), ref)).arrayBuffer()).toString('hex');
@@ -294,17 +302,18 @@ try {
 {
   const only = (await buildGalleryIndex([sources[1]])).index;
   eq('folder mode', only.mode, 'folders');
-  eq('folder stats', [only.stats.scriptsFound, only.stats.images, only.stats.videos, only.stats.audio], [0, 5, 3, 3]);
+  eq('folder stats', [only.stats.scriptsFound, only.stats.images, only.stats.videos, only.stats.audio], [0, 6, 3, 3]);
   eq('folder scenes', only.scenes.map((s) => [s.id, s.title, s.images.length, s.videos.length]), [
     ['images', 'Top level', 3, 0],
     ['images/bg', 'Bg', 1, 0],
+    ['images/gallery', 'Gallery', 1, 0],
     ['images/sprites', 'Sprites', 1, 0],
     ['video', 'Video', 0, 3],
   ]);
-  eq('folder categories', only.characters.map((c) => [c.name, c.sceneCount]), [['Bg', 1], ['Sprites', 1], ['Top level', 1], ['Video', 1]]);
-  eq('folder thumbnail prefers video', only.scenes[3].thumbnail, { path: 'video/ending.webm', kind: 'video' });
-  check('folder assets referenced', Object.keys(only.assets).length === 8);
-  eq('scripts mode stats', [index.mode, index.stats.scriptsFound, index.stats.images], ['scripts', 4, 5]);
+  eq('folder categories', only.characters.map((c) => [c.name, c.sceneCount]), [['Bg', 1], ['Gallery', 1], ['Sprites', 1], ['Top level', 1], ['Video', 1]]);
+  eq('folder thumbnail prefers video', only.scenes[4].thumbnail, { path: 'video/ending.webm', kind: 'video' });
+  check('folder assets referenced', Object.keys(only.assets).length === 9);
+  eq('scripts mode stats', [index.mode, index.stats.scriptsFound, index.stats.images], ['scripts', 4, 6]);
 }
 
 // ── unit checks for the source helpers ──

@@ -179,6 +179,7 @@ media = {
     'images/cg_kiss.jpg': b'\xff\xd8' + b'k' * 90,
     'images/sprites/eileen_happy.png': b'\x89PNG' + b'e' * 70,
     'images/lucy smile.png': b'\x89PNG' + b'l' * 60,
+    'images/gallery/lucy.png': b'\x89PNG' + b'L' * 55,
     'video/intro.webm': b'\x1aE\xdf\xa3' + b'i' * 300,
     'video/ending.webm': b'\x1aE\xdf\xa3' + b'n' * 200,
     'video/extra.webm': b'\x1aE\xdf\xa3' + b'x' * 150,

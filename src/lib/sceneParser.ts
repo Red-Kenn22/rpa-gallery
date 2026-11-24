@@ -244,6 +244,20 @@ export class Registry {
     }
   }
 
+  /** Image files of every image whose tag belongs to this character (sprites, side images). */
+  spritePaths(charId: string): { path: string; side: boolean }[] {
+    const out: { path: string; side: boolean }[] = [];
+    for (const key of this.images.keys()) {
+      const tokens = key.split(' ');
+      const side = tokens[0] === 'side' && tokens.length > 1;
+      const tag = side ? tokens[1] : tokens[0];
+      if (this.tagToChar.get(tag) !== charId) continue;
+      const path = this.resolveImage(tokens);
+      if (path && mediaKind(path) === 'image' && !out.some((o) => o.path === path)) out.push({ path, side });
+    }
+    return out;
+  }
+
   characterForTag(tag: string): string | undefined {
     return this.tagToChar.get(tag.toLowerCase());
   }
@@ -528,6 +542,70 @@ function estimateDuration(entry: string, members: Set<string>, labels: Map<strin
   return Math.round(label(entry));
 }
 
+// ─── Portraits ──────────────────────────────────────────────────────────────
+
+const PORTRAIT_DIRS = /(?:^|\/)(?:gallery|replay|portraits?|profiles?|side|chars?|characters?|select|cards?|avatars?|faces?|busts?|menu|contacts?)(?:\/|_|$)/;
+
+function nameKeys(c: CharacterInfo): string[] {
+  const keys = new Set<string>();
+  for (const raw of [c.name, c.id.replace(/^name:/, '')]) {
+    const n = raw.toLowerCase().replace(/[[\]]/g, '').trim();
+    if (n.length >= 3 && /^[a-z0-9][a-z0-9 _.-]*$/.test(n)) {
+      keys.add(n.replace(/[\s.-]+/g, '_'));
+      const first = n.split(/[\s_.-]+/)[0];
+      if (first.length >= 3) keys.add(first);
+    }
+  }
+  return [...keys];
+}
+
+/**
+ * Guesses a picture for each character, best first:
+ *   image files named after them (more so in gallery/replay/portrait/side
+ *   folders) → their sprites / side images → images from scenes they lead.
+ */
+function pickPortraits(chars: CharacterInfo[], scenes: SceneInfo[], reg: Registry, assets: AssetLookup, referenced: Set<string>): void {
+  const images = [...assets.paths()].filter((p) => mediaKind(p) === 'image');
+  const parsed = images.map((p) => {
+    const lower = p.toLowerCase();
+    const base = lower.slice(lower.lastIndexOf('/') + 1).replace(/\.[^.]+$/, '');
+    return { p, lower, base, tokens: base.split(/[^a-z0-9]+/).filter(Boolean) };
+  });
+
+  for (const c of chars) {
+    const scored = new Map<string, number>();
+    const add = (p: string, score: number) => scored.set(p, Math.max(scored.get(p) ?? 0, score));
+    const keys = nameKeys(c);
+    for (const f of parsed) {
+      let score = 0;
+      for (const k of keys) {
+        if (f.base === k) score = Math.max(score, 6);
+        else if (f.tokens.includes(k) || f.tokens.join('_').includes(k)) score = Math.max(score, 3);
+        else if (f.base.startsWith(k)) score = Math.max(score, 2);
+      }
+      if (!score) continue;
+      if (PORTRAIT_DIRS.test(f.lower)) score += 3;
+      if (/(?:^|[/_])(?:bg|cg|scene|ev)(?:[/_\d]|$)/.test(f.lower)) score -= 1;
+      add(f.p, score);
+    }
+    for (const s of reg.spritePaths(c.id)) add(s.path, s.side ? 5 : 4);
+    // Fallback: the first image of scenes this character leads, then of any scene they're in.
+    let fallback = 0;
+    for (const sc of scenes) {
+      if (!sc.characters.includes(c.id)) continue;
+      const img = sc.backgrounds[0] ?? sc.images[0];
+      if (img) add(img, (sc.speakers[0] === c.id ? 1 : 0.5) - fallback++ * 0.01);
+      if (fallback >= 8) break;
+    }
+    const ranked = [...scored.entries()].sort((a, b) => b[1] - a[1]).map(([p]) => p).slice(0, 8);
+    if (ranked.length) {
+      c.portrait = ranked[0];
+      c.portraitCandidates = ranked;
+      ranked.forEach((p) => referenced.add(p));
+    }
+  }
+}
+
 // ─── Scenes ─────────────────────────────────────────────────────────────────
 
 interface SceneAcc {
@@ -718,6 +796,7 @@ export function buildScenes(files: ScriptFile[], assets: AssetLookup): ScenePars
   }
 
   annotateChoices(programs, scenes);
+  pickPortraits([...charStats.values()].filter((c) => c.sceneCount > 0), scenes, reg, assets, referenced);
 
   const characters = [...charStats.values()]
     .filter((c) => c.sceneCount > 0)

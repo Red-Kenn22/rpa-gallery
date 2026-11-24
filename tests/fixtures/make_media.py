@@ -26,6 +26,7 @@ scene_image('images/bg/sunset.webp', (60, 30, 90), (250, 120, 80), 'sunset', fmt
 scene_image('images/cg_kiss.jpg', (120, 40, 80), (240, 150, 170), 'cg kiss', fmt='JPEG')
 scene_image('images/sprites/eileen_happy.png', (30, 30, 30), (60, 60, 60), 'eileen', size=(400, 800))
 scene_image('images/lucy smile.png', (30, 30, 30), (60, 60, 60), 'lucy', size=(400, 800))
+scene_image('images/gallery/lucy.png', (200, 80, 140), (60, 20, 60), 'LUCY', size=(600, 800))
 
 def video(p, color, label):
     subprocess.run([

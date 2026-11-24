@@ -1,5 +1,7 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { CharacterFilterBar, SortBar, type SortMode } from './components/CharacterFilterBar';
+import { CharacterHeader } from './components/CharacterHeader';
+import { CharacterSelect, MISC_ID } from './components/CharacterSelect';
 import { DropOverlay } from './components/DropOverlay';
 import { FilePickerButton } from './components/FilePickerButton';
 import { Header } from './components/Header';
@@ -12,7 +14,11 @@ import { MediaNotice, ScriptsNotice } from './components/ScriptsNotice';
 import { UpdateToast } from './components/UpdateToast';
 import { Welcome } from './components/Welcome';
 import { useArchive } from './hooks/useArchive';
+import { usePortraits } from './hooks/usePortraits';
 import type { CharacterInfo, GalleryIndex, SceneInfo } from './types';
+
+/** Games with real characters open on the Characters screen. */
+const charactersFirst = (index: GalleryIndex | null) => !!index && index.mode === 'scripts' && index.characters.length >= 2;
 
 function gameTitle(index: GalleryIndex): string {
   const names = index.sources.filter((s) => s.kind === 'rpa').map((s) => s.name);
@@ -35,11 +41,19 @@ export default function App() {
   const index = state.status === 'ready' ? state.index : null;
   const files = state.status === 'ready' ? state.files : null;
   const programs = state.status === 'ready' ? state.programs : null;
+  const [view, setView] = useState<'characters' | 'scenes'>('characters');
+  /** Whether a history entry exists for "inside a character page" (Back returns to Characters). */
+  const viewEntry = useRef(false);
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  const { portraitOf, setPortrait, isCustom } = usePortraits(index?.key);
 
   useEffect(() => {
     setQuery('');
     setCharacter(null);
     setSort('story');
+    setView('characters');
+    viewEntry.current = false;
     setOpenScene(null);
     setPlayScene(null);
     // Overlays are gone; forget the history entries we were tracking for them.
@@ -59,7 +73,9 @@ export default function App() {
     if (!index) return [];
     const q = deferredQuery.trim().toLowerCase();
     return index.scenes.filter((s) => {
-      if (character && !s.characters.includes(character)) return false;
+      if (character === MISC_ID) {
+        if (s.characters.length) return false;
+      } else if (character && !s.characters.includes(character)) return false;
       if (!q) return true;
       if (s.title.toLowerCase().includes(q) || s.id.toLowerCase().includes(q)) return true;
       return s.characters.some((id) => (characters.get(id)?.name ?? id).toLowerCase().includes(q));
@@ -104,6 +120,26 @@ export default function App() {
     setPlayScene(null);
     popOverlay();
   }, []);
+  // Characters screen → a character's page is a history step too.
+  const pickCharacter = useCallback((id: string | null) => {
+    setCharacter(id);
+    setView('scenes');
+    if (!viewEntry.current) {
+      viewEntry.current = true;
+      pushOverlay();
+    }
+    window.scrollTo({ top: 0 });
+  }, []);
+  const backToCharacters = useCallback(() => {
+    setView('characters');
+    setCharacter(null);
+    setQuery('');
+    if (viewEntry.current) {
+      viewEntry.current = false;
+      popOverlay();
+    }
+  }, []);
+
   useEffect(() => {
     const onPop = () => {
       if (ignorePop.current > 0) {
@@ -112,7 +148,12 @@ export default function App() {
       }
       pushed.current = Math.max(0, pushed.current - 1);
       if (playSceneRef.current) setPlayScene(null);
-      else setOpenScene(null);
+      else if (openSceneRef.current) setOpenScene(null);
+      else if (viewEntry.current && viewRef.current === 'scenes') {
+        viewEntry.current = false;
+        setView('characters');
+        setCharacter(null);
+      }
     };
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
@@ -139,6 +180,9 @@ export default function App() {
     },
     [state, open],
   );
+
+  // Typing a search on the Characters screen shows matching scenes instead.
+  const showCharacters = charactersFirst(index) && view === 'characters' && !deferredQuery.trim();
 
   const clearFilters = useCallback(() => {
     setQuery('');
@@ -186,8 +230,24 @@ export default function App() {
           )}
           {index.mode === 'folders' && files && <ScriptsNotice index={index} onAddFiles={addFiles} />}
           {index.mode === 'scripts' && files && index.stats.images + index.stats.videos === 0 && <MediaNotice index={index} onAddFiles={addFiles} />}
+          {showCharacters ? (
+            <CharacterSelect index={index} files={files} characters={index.characters} portraitOf={portraitOf} onPick={pickCharacter} />
+          ) : (
+          <>
+          {charactersFirst(index) && (
+            <CharacterHeader
+              index={index}
+              files={files}
+              character={character && character !== MISC_ID ? characters.get(character) ?? null : null}
+              label={character === MISC_ID ? 'Misc' : character ? undefined : query.trim() ? 'Search results' : 'All scenes'}
+              portrait={character && characters.get(character) ? portraitOf(characters.get(character)!) : undefined}
+              isCustom={!!character && isCustom(character)}
+              onBack={backToCharacters}
+              onSetPortrait={(path) => character && setPortrait(character, path)}
+            />
+          )}
           {index.characters.length > 0 && (
-            <CharacterFilterBar characters={index.characters} selected={character} onSelect={setCharacter} total={index.scenes.length} />
+            <CharacterFilterBar characters={index.characters} selected={character === MISC_ID ? null : character} onSelect={setCharacter} total={index.scenes.length} />
           )}
           {index.scenes.length === 0 ? (
             <p className="py-16 text-center text-sm leading-relaxed text-neutral-400">
@@ -210,6 +270,8 @@ export default function App() {
                 onClearFilters={filtersActive ? clearFilters : undefined}
               />
             </>
+          )}
+          </>
           )}
 
           {index.warnings.length > 0 && (
@@ -276,6 +338,7 @@ export default function App() {
           programs={programs}
           files={files}
           sceneForLabel={sceneForLabel}
+          onSetPortrait={setPortrait}
           onClose={closePlayer}
           onContinue={(next) => {
             setPlayScene(next);

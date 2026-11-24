@@ -14,6 +14,10 @@ export interface CharacterInfo {
   color?: string;
   sceneCount: number;
   lineCount: number;
+  /** Best guess at a picture of this character (archive path), if any. */
+  portrait?: string;
+  /** Other plausible portraits, best first (for the "Change portrait" picker). */
+  portraitCandidates?: string[];
 }
 
 export interface DialogueLine {
