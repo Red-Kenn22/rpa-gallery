@@ -6,7 +6,8 @@ import { IndexingProgress } from './components/IndexingProgress';
 import { SceneGrid } from './components/SceneGrid';
 import { ScenePlayer } from './components/ScenePlayer';
 import { ScenePreviewModal } from './components/ScenePreviewModal';
-import { ScriptsNotice } from './components/ScriptsNotice';
+import { FilePickerButton } from './components/FilePickerButton';
+import { MediaNotice, ScriptsNotice } from './components/ScriptsNotice';
 import { Welcome } from './components/Welcome';
 import { useArchive } from './hooks/useArchive';
 import type { CharacterInfo, GalleryIndex, SceneInfo } from './types';
@@ -116,6 +117,19 @@ export default function App() {
     [state, attachFiles, open],
   );
 
+  /** Adds files to the current selection and re-indexes (pickers can't multi-select across folders). */
+  const addFiles = useCallback(
+    (picked: File[]) => {
+      const current = state.status === 'ready' && state.files ? state.files : [];
+      const merged = [...current];
+      for (const f of picked) {
+        if (!merged.some((m) => m.name === f.name && m.size === f.size && m.lastModified === f.lastModified)) merged.push(f);
+      }
+      void open(merged);
+    },
+    [state, open],
+  );
+
   const cachedTag = state.status === 'ready' && state.fromCache ? ' · cached' : '';
   const subtitle = !index
     ? undefined
@@ -147,7 +161,8 @@ export default function App() {
               Opened from the cache. Tap <b>Open</b> and select the same files to load thumbnails and media.
             </p>
           )}
-          {index.mode === 'folders' && <ScriptsNotice index={index} onFiles={onFiles} />}
+          {index.mode === 'folders' && files && <ScriptsNotice index={index} onAddFiles={addFiles} />}
+          {index.mode === 'scripts' && files && index.stats.images + index.stats.videos === 0 && <MediaNotice index={index} onAddFiles={addFiles} />}
           {index.characters.length > 0 && (
             <CharacterFilterBar characters={index.characters} selected={character} onSelect={setCharacter} total={index.scenes.length} />
           )}
@@ -175,7 +190,18 @@ export default function App() {
               </ul>
             </details>
           )}
-          <p className="mt-6 text-center text-[11px] text-neutral-600">
+          {files && (
+            <div className="mt-6 flex justify-center">
+              <FilePickerButton
+                onFiles={addFiles}
+                label="Add more files to this archive"
+                className="rounded-full px-3.5 py-1.5 text-xs text-neutral-300 ring-1 ring-white/15 active:scale-95"
+              >
+                + Add more files ({index.sources.map((src) => src.name).join(', ')})
+              </FilePickerButton>
+            </div>
+          )}
+          <p className="mt-3 text-center text-[11px] text-neutral-600">
             {index.stats.scriptsParsed} scripts · {index.stats.archiveEntries.toLocaleString()} archive files · indexed in{' '}
             {index.stats.millis < 1000 ? `${index.stats.millis} ms` : `${(index.stats.millis / 1000).toFixed(1)} s`}
           </p>

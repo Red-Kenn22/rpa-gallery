@@ -165,9 +165,12 @@ await page.locator('[data-scene="video"]').click();
 check('folder preview has no dialogue list', (await page.getByRole('dialog').innerText()).includes('Folder view: 0 images, 3 videos'));
 await page.keyboard.press('Escape');
 
-// ── APK + archive.rpa: scripts from the APK, media from the archive ──
-await page.locator('input[type=file]').first().setInputFiles([join(fixtures, 'game.apk'), join(fixtures, 'images.rpa')]);
+// ── APK + archive.rpa from different folders: open the archive, then add the APK ──
+await page.getByRole('button', { name: 'Add the APK or script files' }).waitFor();
+const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.getByRole('button', { name: 'Add the APK or script files' }).click()]);
+await chooser.setFiles([join(fixtures, 'game.apk')]);
 await page.locator('[data-scene="apk_bonus"]').waitFor({ timeout: 20000 });
+check('adding the APK keeps the archive', (await page.locator('main').innerText()).includes('images.rpa') && (await page.locator('main').innerText()).includes('game.apk'));
 check('apk opens with scenes', (await cards.count()) === 9, `cards=${await cards.count()}`);
 await page.waitForFunction(() => { const i = document.querySelector('[data-scene="apk_bonus"] img'); return i && i.naturalWidth > 0; }, null, { timeout: 15000 }).catch(() => {});
 check('thumbnail from image inside APK', (await page.locator('[data-scene="apk_bonus"] img').count()) === 1);

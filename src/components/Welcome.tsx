@@ -47,8 +47,8 @@ export function Welcome({
         <FolderOpenIcon /> Open archive files
       </FilePickerButton>
       <p className="mt-3 text-center text-xs leading-relaxed text-neutral-500">
-        Tip: open the game's <code>game</code> folder and select <b className="text-neutral-300">all</b> its <code>.rpa</code> files <b className="text-neutral-300">and</b> any
-        loose <code>.rpyc</code> files. Many games keep their scripts outside the archives.
+        Android games: open the <code>.apk</code> and its <code>archive.rpa</code>. PC games: all <code>.rpa</code> files plus any loose{' '}
+        <code>.rpyc</code> files. Files in different folders? Open one, then use <b className="text-neutral-300">Add</b> for the rest.
       </p>
 
       {recent.length > 0 && (
