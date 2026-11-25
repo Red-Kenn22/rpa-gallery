@@ -111,7 +111,7 @@ export interface IndexDiagnostics {
 }
 
 export interface GalleryIndex {
-  schema: 6;
+  schema: 7;
   /**
    * 'scripts' – scenes come from the game's labels.
    * 'folders' – no scripts were found; scenes are the archive's folders and

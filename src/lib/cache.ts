@@ -101,7 +101,7 @@ async function withStore<T>(
 
 export async function getCachedIndex(key: string): Promise<GalleryIndex | null> {
   const rec = await withStore<IndexRecord | undefined>(INDEXES, 'readonly', (s) => s.get(key));
-  return rec?.index?.schema === 6 ? rec.index : null;
+  return rec?.index?.schema === 7 ? rec.index : null;
 }
 
 export async function putCachedIndex(index: GalleryIndex): Promise<void> {
@@ -114,7 +114,7 @@ export async function putCachedIndex(index: GalleryIndex): Promise<void> {
 export async function listCachedIndexes(): Promise<CachedIndexSummary[]> {
   const all = (await withStore<IndexRecord[]>(INDEXES, 'readonly', (s) => s.getAll())) ?? [];
   return all
-    .filter((r) => r.index?.schema === 6)
+    .filter((r) => r.index?.schema === 7)
     .map((r) => ({
       key: r.key,
       savedAt: r.savedAt,
