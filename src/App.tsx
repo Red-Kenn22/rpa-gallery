@@ -18,6 +18,9 @@ import { useArchive } from './hooks/useArchive';
 import { usePortraits } from './hooks/usePortraits';
 import type { CharacterInfo, GalleryIndex, SceneInfo } from './types';
 
+/** Tiny labels (a line or two, no video): navigation stubs, puzzle steps, resets. */
+const isShortScene = (s: SceneInfo) => s.dialogueCount <= 1 && s.videos.length === 0;
+
 /** Games with real characters open on the Characters screen. */
 const charactersFirst = (index: GalleryIndex | null) => !!index && index.mode === 'scripts' && index.characters.length >= 2;
 
@@ -33,6 +36,7 @@ export default function App() {
   const deferredQuery = useDeferredValue(query);
   const [character, setCharacter] = useState<string | null>(null);
   const [sort, setSort] = useState<SortMode>('story');
+  const [showShort, setShowShort] = useState(false);
   const [openScene, setOpenScene] = useState<SceneInfo | null>(null);
   const [playScene, setPlayScene] = useState<SceneInfo | null>(null);
   /** History entries we pushed for open overlays (sheet, player), so Back closes them. */
@@ -53,6 +57,7 @@ export default function App() {
     setQuery('');
     setCharacter(null);
     setSort('story');
+    setShowShort(false);
     setView('characters');
     viewEntry.current = false;
     setOpenScene(null);
@@ -69,19 +74,35 @@ export default function App() {
   }, [index]);
 
   const characters = useMemo(() => new Map<string, CharacterInfo>((index?.characters ?? []).map((c) => [c.id, c])), [index]);
+  /** Speaker variants merged into one character (e.g. "mct" → "mc"). */
+  const canonicalId = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const c of index?.characters ?? []) for (const a of c.aliases ?? []) map.set(a, c.id);
+    return (id: string) => map.get(id) ?? id;
+  }, [index]);
+  const setPortraitFor = useCallback((id: string, path: string | null) => setPortrait(canonicalId(id), path), [setPortrait, canonicalId]);
 
-  const filtered = useMemo(() => {
-    if (!index) return [];
+  const { filtered, shortHidden } = useMemo(() => {
+    if (!index) return { filtered: [], shortHidden: 0 };
     const q = deferredQuery.trim().toLowerCase();
-    return index.scenes.filter((s) => {
+    let shortHidden = 0;
+    const filtered = index.scenes.filter((s) => {
       if (character === MISC_ID) {
         if (s.characters.length) return false;
       } else if (character && !s.characters.includes(character)) return false;
-      if (!q) return true;
+      if (!q) {
+        // Short fragments stay out of the way unless asked for (search always finds them).
+        if (!showShort && index.mode === 'scripts' && isShortScene(s)) {
+          shortHidden++;
+          return false;
+        }
+        return true;
+      }
       if (s.title.toLowerCase().includes(q) || s.id.toLowerCase().includes(q)) return true;
       return s.characters.some((id) => (characters.get(id)?.name ?? id).toLowerCase().includes(q));
     });
-  }, [index, deferredQuery, character, characters]);
+    return { filtered, shortHidden };
+  }, [index, deferredQuery, character, characters, showShort]);
 
   const sorted = useMemo(() => {
     if (sort === 'story') return filtered;
@@ -248,7 +269,7 @@ export default function App() {
             />
           )}
           {index.characters.length > 0 && (
-            <CharacterFilterBar characters={index.characters} selected={character === MISC_ID ? null : character} onSelect={setCharacter} total={index.scenes.length} />
+            <CharacterFilterBar characters={index.characters.filter((c) => c.role !== 'minor' || c.id === character)} selected={character === MISC_ID ? null : character} onSelect={setCharacter} total={index.scenes.length} />
           )}
           {index.scenes.length === 0 ? (
             <p className="py-16 text-center text-sm leading-relaxed text-neutral-400">
@@ -270,6 +291,18 @@ export default function App() {
                 onOpen={showScene}
                 onClearFilters={filtersActive ? clearFilters : undefined}
               />
+              {(shortHidden > 0 || showShort) && (
+                <div className="mt-5 flex justify-center">
+                  <button
+                    type="button"
+                    onClick={() => setShowShort((v) => !v)}
+                    className="rounded-full px-3.5 py-1.5 text-xs text-neutral-300 ring-1 ring-white/15 active:scale-95"
+                    data-show-short
+                  >
+                    {showShort ? 'Hide short scenes' : `Show ${shortHidden} short scene${shortHidden === 1 ? '' : 's'}`}
+                  </button>
+                </div>
+              )}
             </>
           )}
           </>
@@ -340,7 +373,7 @@ export default function App() {
           programs={programs}
           files={files}
           sceneForLabel={sceneForLabel}
-          onSetPortrait={setPortrait}
+          onSetPortrait={setPortraitFor}
           onClose={closePlayer}
           onContinue={(next) => {
             setPlayScene(next);

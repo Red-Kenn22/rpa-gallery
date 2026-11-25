@@ -66,7 +66,8 @@ export function buildDiagnostics(index: GalleryIndex, programs: ScenePrograms | 
     for (const [name, lp] of Object.entries(programs.labels)) {
       if (labels.length < MAX_LABELS) labels.push(summarizeLabel(name, lp.file, lp.steps, lp.next, sceneOf.get(name) ?? null));
       for (const st of lp.steps) {
-        if ((st.t === 'bg' || st.t === 'show' || st.t === 'video') && !st.img && st.name) {
+        // `black` is Ren'Py's built-in solid black, not a missing file.
+        if ((st.t === 'bg' || st.t === 'show' || st.t === 'video') && !st.img && st.name && st.name !== 'black') {
           unresolved.set(st.name, (unresolved.get(st.name) ?? 0) + 1);
         }
       }
@@ -99,6 +100,8 @@ export function buildDiagnostics(index: GalleryIndex, programs: ScenePrograms | 
       id: c.id,
       name: c.name,
       color: c.color,
+      role: c.role ?? null,
+      aliases: c.aliases ?? [],
       scenes: c.sceneCount,
       lines: c.lineCount,
       portrait: c.portrait ?? null,
@@ -128,6 +131,7 @@ export function buildDiagnostics(index: GalleryIndex, programs: ScenePrograms | 
       screens: index.diag?.screens ?? [],
       lines: index.diag?.replay ?? [],
       targets: [...replayTargets].map(([label, scene]) => ({ label, scene })),
+      code: index.diag?.code ?? [],
     },
     folders: index.diag?.folders ?? [],
     foldersTruncated: index.diag?.foldersTruncated ?? false,

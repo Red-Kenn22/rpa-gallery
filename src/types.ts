@@ -18,6 +18,10 @@ export interface CharacterInfo {
   portrait?: string;
   /** Other plausible portraits, best first (for the "Change portrait" picker). */
   portraitCandidates?: string[];
+  /** Other speaker ids with the same name, merged into this one (e.g. "mct" for thoughts). */
+  aliases?: string[];
+  /** protagonist = the player character; main = gets a card; minor = listed under "More characters". */
+  role?: 'protagonist' | 'main' | 'minor';
 }
 
 export interface DialogueLine {
@@ -102,10 +106,12 @@ export interface IndexDiagnostics {
   screens: { name: string; file: string }[];
   /** Script lines mentioning Replay(...), call_replay or Gallery code (for a replay-gallery view). */
   replay: { file: string; screen?: string; text: string }[];
+  /** Gallery / replay / bio files: their strings outside labels and dialogue, in order. */
+  code?: { file: string; strings: string[]; truncated: boolean }[];
 }
 
 export interface GalleryIndex {
-  schema: 5;
+  schema: 6;
   /**
    * 'scripts' – scenes come from the game's labels.
    * 'folders' – no scripts were found; scenes are the archive's folders and

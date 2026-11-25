@@ -12,7 +12,9 @@ import { buildGalleryIndex, IndexCancelledError, type SourceFile } from '../src/
 import { parseRpy } from '../src/lib/rpyParser.ts';
 import { PlayerEngine } from '../src/lib/playerEngine.ts';
 import { findCalls, literalValue, splitTopLevel } from '../src/lib/pyString.ts';
-import { formatTitle } from '../src/lib/sceneParser.ts';
+import { BIG_LABEL_LINES, buildScenes, formatTitle } from '../src/lib/sceneParser.ts';
+import { DiagCollector } from '../src/lib/diagScan.ts';
+import { PyClass, PyObject } from '../src/lib/pickle.ts';
 import type { GalleryIndex, SceneInfo, Step } from '../src/types.ts';
 import type { WorkerResponse } from '../src/workers/protocol.ts';
 
@@ -343,6 +345,61 @@ eq('rpy show clauses', parseRpy('label a:\n    show eileen happy at left with di
   { k: 'return', line: 6 },
 ]);
 eq('rpy if/elif/else + menu conditions', JSON.stringify(parseRpy('label a:\n    if x > 1:\n        "big"\n    elif x:\n        "small"\n    else:\n        "none"\n    menu:\n        "Go" if ok:\n            jump b\n        "Stay":\n            pass\n').flatMap((s) => (s.k === 'label' ? s.body : [])).map((s) => s.k === 'if' ? s.entries.map((e) => e.cond) : s.k === 'menu' ? s.choices.map((c) => [c.text, c.cond]) : s.k)), JSON.stringify([['x > 1', 'x', 'True'], [['Go', 'ok'], ['Stay', null]]]));
+
+// ── Big casts: narrators, same-name variants, roles, big branch labels, portrait matching ──
+{
+  const lines = (who: string, n: number, tag: string) => Array.from({ length: n }, (_, i) => `    ${who} "${tag} ${i}"`).join('\n');
+  const chars = ['define bla = Character(None, what_color="#fff")', 'define mc = Character("[player]")', 'define mct = Character("[player]", what_italic=True)',
+    'define d = Character("Dalia", color="#f60")', 'define dsc = Character("Dalia")', 'define x = Character("Alex")', 'define no = Character("Nova")', 'define bro = Character("Brock")'];
+  for (let i = 0; i < 9; i++) chars.push(`define m${i} = Character("Minor ${String.fromCharCode(65 + i)}")`);
+  let src = chars.join('\n') + '\n';
+  // 12 scenes; mc in all of them, Dalia leads most.
+  for (let k = 0; k < 12; k++) src += `label s${k}:\n    scene bg room${k}\n${lines('mc', 3, `mc${k}`)}\n${lines('mct', 1, `t${k}`)}\n${lines('d', 40, `d${k}`)}\n${lines('bla', 2, `n${k}`)}\n    m${k % 9} "minor line"\n    return\n`;
+  // A menu that jumps to a big date (its own scene) and a small branch (merged).
+  src += `label sat:\n    mc "Where to?"\n    menu:\n        "Gym":\n            jump gym\n        "Stay":\n            jump stay\nlabel gym:\n${lines('x', BIG_LABEL_LINES, 'g')}\n    return\nlabel stay:\n    x "Fine."\n    return\n`;
+  src += `label dsc_scene:\n${lines('dsc', 5, 'p')}\n${lines('no', 80, 'n')}\n    return\n`;
+  const paths = ['images/bios/lk_dalia0.webp', 'images/gallery/ga_dalia1.jpg', 'images/gallery/ga_alexdalia.jpg', 'images/gallery/ga_alex1.jpg', 'images/lock/lock_pick_broken.png',
+    'images/MENUS/e_brows.png', 'gui/sp2/alex_d.png', 'images/02/white.webp', 'images/ga_nova1.png', ...Array.from({ length: 12 }, (_, k) => `images/bg room${k}.jpg`)];
+  const lookup = { paths: () => paths, resolve: (f: string) => paths.find((p) => p.toLowerCase() === f.toLowerCase()) ?? null };
+  const r = buildScenes([{ path: 'game/script.rpy', stmts: parseRpy(src) }], lookup as never);
+  const byId = Object.fromEntries(r.characters.map((c) => [c.id, c]));
+  check('nameless Character(None) is narration, not a character', !byId.bla && !r.characters.some((c) => c.name === 'bla'));
+  check('same-name variants merge (mct into mc, dsc into d)', !byId.mct && byId.mc?.aliases?.includes('mct') === true && byId.d?.aliases?.includes('dsc') === true && !byId.dsc, JSON.stringify(r.characters.map((c) => c.id)));
+  eq('merged line counts add up', byId.d?.lineCount, 12 * 40 + 5);
+  check('merged ids rewritten in scenes', r.scenes.find((s) => s.id === 'dsc_scene')?.characters.includes('d') === true);
+  eq('player character detected', byId.mc?.role, 'protagonist');
+  check('main cast vs minor characters', byId.d?.role === 'main' && byId.x?.role === 'main' && byId.no?.role === 'main' && byId.m0?.role === 'minor', JSON.stringify(r.characters.map((c) => [c.id, c.role, c.lineCount])));
+  check('big label picked from a menu is its own scene', r.scenes.some((s) => s.id === 'gym') && r.scenes.find((s) => s.id === 'sat')?.labels.includes('stay') === true, JSON.stringify(r.scenes.filter((s) => /sat|gym|stay/.test(s.id)).map((s) => s.labels)));
+  eq('portrait: bios beats gallery, no substring matches', byId.d?.portrait, 'images/bios/lk_dalia0.webp');
+  check('portrait candidates skip UI art and blank screens', !r.characters.some((c) => c.portraitCandidates?.some((p) => /lock|MENUS|gui\/|white/.test(p))), JSON.stringify(r.characters.map((c) => [c.id, c.portraitCandidates])));
+  check('short variable names do not match files', !byId.bro?.portraitCandidates?.includes('images/lock/lock_pick_broken.png'));
+  eq('portrait: whole word in gallery file', byId.x?.portrait, 'images/gallery/ga_alex1.jpg');
+  check('channels: no loop argument loops', (() => {
+    const r2 = buildScenes([{ path: 'game/a.rpy', stmts: parseRpy('init python:\n    renpy.music.register_channel("music", "music")\n    renpy.music.register_channel("sfx2", "sfx", False)\n    renpy.music.register_channel("amb", "sfx", loop=True)\nlabel a:\n    "x"\n') }], lookup as never);
+    return r2.programs.channels.music === true && r2.programs.channels.sfx2 === false && r2.programs.channels.amb === true;
+  })());
+}
+
+// ── Diagnostics: gallery code capture ──
+{
+  const node = (cls: string, attrs: Record<string, unknown>) => {
+    const o = new PyObject(new PyClass(cls.includes('SL') ? 'renpy.sl2.slast' : 'renpy.ast', cls));
+    for (const [k, v] of Object.entries(attrs)) o.attrs.set(k, v);
+    return o;
+  };
+  const tree = [
+    node('Init', { block: [node('Python', { code: 'replays = [("Annie", "ga_annie1", "ga_annie1_label", 1)]' })] }),
+    node('Screen', { screen: node('SLScreen', { name: 'filter_girl', children: [node('SLDisplayable', { keyword: [['action', 'SetVariable("girl", "annie")']] })] }) }),
+    node('Label', { name: 'ga_annie1_label', block: [node('Say', { who: 'a', what: 'secret dialogue' })] }),
+  ];
+  const dc = new DiagCollector();
+  dc.scanTree('game/gallery.rpyc', tree);
+  const code = dc.code[0]?.strings ?? [];
+  check('diag code: gallery data and screens kept in order', code.includes('replays = [("Annie", "ga_annie1", "ga_annie1_label", 1)]') && code.indexOf('«screen filter_girl»') < code.indexOf('SetVariable("girl", "annie")'), JSON.stringify(code));
+  check('diag code: labels and dialogue left out', !code.includes('secret dialogue') && !code.includes('ga_annie1_label'), JSON.stringify(code));
+  dc.scanTree('game/script.rpyc', tree);
+  eq('diag code: only gallery-ish files', dc.code.length, 1);
+}
 
 console.log(`${passed} passed, ${failures.length} failed`);
 for (const f of failures) console.log('  ✗ ' + f);

@@ -348,7 +348,7 @@ export function ScenePlayer({
   const speaker = v.say?.who ? programs.speakers[v.say.who] : undefined;
   // "Use as portrait" targets whoever is speaking (or spoke last), if they're a gallery character.
   const lastWho = v.say?.who ?? engine.previousLine?.who ?? null;
-  const portraitTarget = lastWho ? index.characters.find((c) => c.id === lastWho) : undefined;
+  const portraitTarget = lastWho ? index.characters.find((c) => c.id === lastWho || c.aliases?.includes(lastWho)) : undefined;
   const next = v.ended?.nextLabel ? sceneForLabel(v.ended.nextLabel) : undefined;
   const frameImg = v.video?.img ?? [...v.layers].reverse().find((l) => l.img)?.img ?? v.bg?.img;
   const frameUrl = media.url(frameImg);

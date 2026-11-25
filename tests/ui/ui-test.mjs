@@ -87,6 +87,9 @@ await page.locator('[data-all-scenes]').waitFor({ timeout: 5000 }).catch(() => {
 check('Android back returns to characters', (await page.locator('[data-all-scenes]').count()) === 1);
 await page.locator('[data-all-scenes]').click();
 await cards.first().waitFor({ timeout: 20000 });
+check('one-line scenes tucked away', (await cards.count()) === 6 && (await page.locator('[data-show-short]').innerText()) === 'Show 2 short scenes', `cards=${await cards.count()}`);
+await page.locator('[data-show-short]').click();
+await page.waitForFunction(() => document.querySelectorAll('[data-scene]').length === 8, null, { timeout: 5000 }).catch(() => {});
 
 // diagnostics export (headless Chromium has no share sheet, so it downloads)
 {
@@ -208,6 +211,7 @@ await page.locator('main li button').first().click();
 await page.locator('[data-all-scenes]').waitFor();
 await page.locator('[data-all-scenes]').click();
 await cards.first().waitFor();
+await page.locator('[data-show-short]').click();
 check('cache-only banner', (await page.getByText('Opened from the cache').count()) === 1);
 check('banner can re-attach files', (await page.getByRole('button', { name: 'Select the archive files again' }).count()) === 1);
 await page.waitForFunction(() => document.querySelectorAll('[data-scene] img').length === 7, null, { timeout: 10000 }).catch(() => {});
@@ -237,6 +241,9 @@ const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.getB
 await chooser.setFiles([join(fixtures, 'game.apk')]);
 await page.locator('[data-all-scenes]').waitFor({ timeout: 20000 });
 await page.locator('[data-all-scenes]').click();
+await cards.first().waitFor({ timeout: 20000 });
+check('APK scene list hides its one-line scenes too', /^Show \d+ short scenes?$/.test(await page.locator('[data-show-short]').innerText()) && (await page.locator('[data-scene="apk_bonus"]').count()) === 0);
+await page.locator('[data-show-short]').click();
 await page.locator('[data-scene="apk_bonus"]').waitFor({ timeout: 20000 });
 check('adding the APK keeps the archive', (await page.locator('main').innerText()).includes('images.rpa') && (await page.locator('main').innerText()).includes('game.apk'));
 check('apk opens with scenes', (await cards.count()) === 9, `cards=${await cards.count()}`);

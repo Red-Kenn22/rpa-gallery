@@ -1,4 +1,4 @@
-import { memo, useRef } from 'react';
+import { memo, useRef, useState } from 'react';
 import { useAssetThumbnail } from '../hooks/useAssetThumbnail';
 import { useInView } from '../hooks/useInView';
 import { formatDuration, normalizeHex } from '../lib/format';
@@ -78,6 +78,13 @@ export function CharacterSelect({
   const misc = index.scenes.filter((s) => s.characters.length === 0);
   const allSecs = index.scenes.reduce((n, s) => n + s.durationSec, 0);
   const tile = 'grid aspect-[3/4] place-items-center rounded-2xl p-3 text-center ring-1 transition active:scale-[0.98]';
+  const sub = (c: CharacterInfo) => `${c.sceneCount} scene${c.sceneCount === 1 ? '' : 's'} · ${formatDuration(totals.get(c.id) ?? 0)}`;
+  // Cards for the main cast; the player character and minor characters go in a compact list.
+  const cards = characters.filter((c) => c.role !== 'minor' && c.role !== 'protagonist');
+  const others = characters
+    .filter((c) => c.role === 'minor' || c.role === 'protagonist')
+    .sort((a, b) => (a.role === 'protagonist' ? -1 : b.role === 'protagonist' ? 1 : b.lineCount - a.lineCount));
+  const [showOthers, setShowOthers] = useState(false);
 
   return (
     <section aria-label="Characters" className="pt-3">
@@ -90,7 +97,7 @@ export function CharacterSelect({
             </span>
           </span>
         </button>
-        {characters.map((c) => (
+        {cards.map((c) => (
           <CharacterCard
             key={c.id}
             id={c.id}
@@ -99,7 +106,7 @@ export function CharacterSelect({
             name={c.name}
             color={c.color}
             path={portraitOf(c)}
-            sub={`${c.sceneCount} scene${c.sceneCount === 1 ? '' : 's'} · ${formatDuration(totals.get(c.id) ?? 0)}`}
+            sub={sub(c)}
             onClick={() => onPick(c.id)}
           />
         ))}
@@ -114,6 +121,34 @@ export function CharacterSelect({
           </button>
         )}
       </div>
+      {others.length > 0 && (
+        <div className="mt-4">
+          <button
+            type="button"
+            onClick={() => setShowOthers((v) => !v)}
+            aria-expanded={showOthers}
+            className="w-full rounded-xl bg-white/[0.04] px-4 py-3 text-left text-sm font-medium text-neutral-200 ring-1 ring-white/10 active:scale-[0.99]"
+            data-more-characters
+          >
+            {showOthers ? 'Hide' : 'More characters'} <span className="text-neutral-500">· {others.length}</span>
+          </button>
+          {showOthers && (
+            <ul className="mt-2 divide-y divide-white/5 overflow-hidden rounded-xl bg-white/[0.03] ring-1 ring-white/5" data-other-characters>
+              {others.map((c) => (
+                <li key={c.id}>
+                  <button type="button" onClick={() => onPick(c.id)} className="flex w-full items-baseline justify-between gap-3 px-4 py-2.5 text-left active:bg-white/5" data-character={c.id}>
+                    <span className="min-w-0 truncate text-sm font-semibold" style={{ color: normalizeHex(c.color) ?? '#e5e5e5' }}>
+                      {c.name}
+                      {c.role === 'protagonist' && <span className="ml-2 text-[11px] font-normal text-neutral-400">player character</span>}
+                    </span>
+                    <span className="shrink-0 text-[11px] text-neutral-500">{sub(c)}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
     </section>
   );
 }

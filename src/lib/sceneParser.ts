@@ -43,6 +43,8 @@ interface CharDef {
   color?: string;
   imageTag?: string;
   kind?: string;
+  /** Character(None) or no name at all: a styled narrator, not a person. */
+  nameless?: boolean;
 }
 
 type ImageAlias = { file: string } | { ref: string };
@@ -192,7 +194,8 @@ export class Registry {
       for (const c of findCalls(source, /renpy\.(?:music|audio)\.register_channel/)) {
         const name = literalValue(c.args.positional[0]);
         const loop = (c.args.keyword.loop ?? c.args.positional[2] ?? '').trim();
-        if (name) this.channels[name] = loop === 'True';
+        // Ren'Py: loop=None (not given) means sounds on the channel loop by default.
+        if (name) this.channels[name] = loop === '' || loop === 'None' || loop === 'True' || loop === '1';
       }
     }
     const gui = /gui\.init\(\s*(\d+)\s*,\s*(\d+)\s*\)/.exec(source);
@@ -228,7 +231,10 @@ export class Registry {
         if (parent.name !== null) def.name = parent.name;
         parent = parent.kind ? this.chars.get(parent.kind) : undefined;
       }
-      if (def.name === null || def.name === '') def.name = def.id;
+      if (def.name === null || def.name === '') {
+        def.name = def.id;
+        def.nameless = true;
+      }
     }
 
     // Image tag → character, strongest signal first.
@@ -277,6 +283,7 @@ export class Registry {
     if (v === 'extend') return 'extend';
     if (NARRATORS.has(v)) return null;
     const def = this.chars.get(v);
+    if (def?.nameless) return null;
     return { id: v, name: def?.name ?? v };
   }
 
@@ -425,6 +432,24 @@ function continuationStem(name: string): string {
  * linear jumps to differently named labels start a new scene, so a linear
  * game doesn't collapse into one giant scene.
  */
+/** Say statements in a label's own body (menus and ifs included, nested labels not). */
+function countSays(body: Stmt[]): number {
+  let n = 0;
+  for (const s of body) {
+    if (s.k === 'say') n++;
+    else if (s.k === 'menu') for (const c of s.choices) n += countSays(c.body);
+    else if (s.k === 'if') for (const e of s.entries) n += countSays(e.body);
+    else if (s.k === 'while') n += countSays(s.body);
+  }
+  return n;
+}
+
+/**
+ * A label reached from a menu with this many lines of its own is a scene in its
+ * own right (a date picked from a menu), not a branch of the menu's scene.
+ */
+export const BIG_LABEL_LINES = 100;
+
 function mergeScenes(labels: Map<string, LabelNode>, edges: Edge[]): Map<string, string[]> {
   const incoming = new Map<string, Edge[]>();
   for (const e of edges) {
@@ -452,7 +477,8 @@ function mergeScenes(labels: Map<string, LabelNode>, edges: Edge[]): Map<string,
         const b = continuationStem(l.name);
         return b.length > 1 && a === b;
       });
-      if (local || (sameFile && (viaBranch || continuation))) target = s;
+      const big = countSays(l.body) >= BIG_LABEL_LINES;
+      if (local || (sameFile && (continuation || (viaBranch && !big)))) target = s;
       if (target && ins.some((e) => e.kind === 'branch')) branchMember.add(l.name);
     }
     sceneOf.set(l.name, target ?? l.name);
@@ -544,66 +570,176 @@ function estimateDuration(entry: string, members: Set<string>, labels: Map<strin
 
 // ─── Portraits ──────────────────────────────────────────────────────────────
 
-const PORTRAIT_DIRS = /(?:^|\/)(?:gallery|replay|portraits?|profiles?|side|chars?|characters?|select|cards?|avatars?|faces?|busts?|menu|contacts?)(?:\/|_|$)/;
+/** Folders whose images are pictures of characters (bios, portraits, side images…). */
+const PORTRAIT_DIRS = /(?:^|\/)(?:portraits?|profiles?|bios?|biograph(?:y|ies)|side|chars?|characters?|cast|select|cards?|avatars?|faces?|busts?|contacts?|people)(?:\/|_|$)/;
+/** Gallery / replay thumbnails: real pictures of the character, usually from scenes. */
+const GALLERY_DIRS = /(?:^|\/)(?:gallery|galleries|replays?|cgs?)(?:\/|_|$)/;
+/** Interface art: never a portrait. */
+const UI_PATH = /(?:^|\/)(?:gui|ui|interface|menus?|buttons?|icons?|hud|minigames?|lock|combination lock)\//;
+const UI_WORDS = new Set([
+  'button', 'btn', 'hover', 'idle', 'selected', 'insensitive', 'icon', 'chibi', 'emoji', 'menu', 'overlay', 'frame',
+  'bar', 'slider', 'scrollbar', 'thumb', 'cursor', 'lock', 'logo', 'title', 'textbox', 'namebox', 'presplash',
+  'splash', 'heart', 'locked', 'unlock', 'arrow', 'back', 'background', 'filter', 'mask', 'black', 'white', 'blank',
+]);
+const PLAIN_SCREEN = /(?:^|\/)(?:black|white|blank|empty|transparent|solid)[^/]*$/;
 
+/** Words a file must contain to be "named after" the character (from the display name). */
 function nameKeys(c: CharacterInfo): string[] {
   const keys = new Set<string>();
-  for (const raw of [c.name, c.id.replace(/^name:/, '')]) {
-    const n = raw.toLowerCase().replace(/[[\]]/g, '').trim();
-    if (n.length >= 3 && /^[a-z0-9][a-z0-9 _.-]*$/.test(n)) {
-      keys.add(n.replace(/[\s.-]+/g, '_'));
-      const first = n.split(/[\s_.-]+/)[0];
-      if (first.length >= 3) keys.add(first);
-    }
+  const raw = c.name.replace(/\[[^\]]*\]/g, ' ').toLowerCase();
+  const words = raw.split(/[^a-z]+/).filter((w) => w.length >= 3);
+  if (words.length) {
+    keys.add(words.join(''));
+    keys.add(words[0]);
   }
+  // A long, word-like variable name (e.g. "lucy") counts too; short ones ("no", "eli") match too much.
+  const id = c.id.replace(/^name:/, '').toLowerCase();
+  if (/^[a-z]{4,}$/.test(id)) keys.add(id);
+  for (const k of keys) if (UI_WORDS.has(k)) keys.delete(k);
   return [...keys];
+}
+
+function naturalCompare(a: string, b: string): number {
+  return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
 }
 
 /**
  * Guesses a picture for each character, best first:
- *   image files named after them (more so in gallery/replay/portrait/side
- *   folders) → their sprites / side images → images from scenes they lead.
+ *   image files named after them (more so in bio/portrait/side folders, then
+ *   gallery folders) → their sprites / side images → images from scenes they lead.
+ * Interface art (gui/, menus, buttons, chibis…) and plain black/white screens are skipped.
  */
-function pickPortraits(chars: CharacterInfo[], scenes: SceneInfo[], reg: Registry, assets: AssetLookup, referenced: Set<string>): void {
+function pickPortraits(chars: CharacterInfo[], scenes: SceneInfo[], reg: Registry, assets: AssetLookup, referenced: Set<string>, protagonist: string | null): void {
   const images = [...assets.paths()].filter((p) => mediaKind(p) === 'image');
-  const parsed = images.map((p) => {
+  const parsed = images
+    .map((p) => {
+      const lower = p.toLowerCase();
+      const base = lower.slice(lower.lastIndexOf('/') + 1).replace(/\.[^.]+$/, '');
+      // "ga_nancy1" → ga, nancy; "lk_penelope0" → lk, penelope
+      return { p, lower, base, tokens: base.split(/[^a-z]+/).filter(Boolean) };
+    })
+    .filter((f) => !UI_PATH.test(f.lower) && !f.tokens.some((t) => UI_WORDS.has(t)) && !PLAIN_SCREEN.test(f.lower));
+  const usable = (p: string) => {
     const lower = p.toLowerCase();
-    const base = lower.slice(lower.lastIndexOf('/') + 1).replace(/\.[^.]+$/, '');
-    return { p, lower, base, tokens: base.split(/[^a-z0-9]+/).filter(Boolean) };
-  });
+    return !UI_PATH.test(lower) && !PLAIN_SCREEN.test(lower);
+  };
 
   for (const c of chars) {
     const scored = new Map<string, number>();
     const add = (p: string, score: number) => scored.set(p, Math.max(scored.get(p) ?? 0, score));
     const keys = nameKeys(c);
-    for (const f of parsed) {
-      let score = 0;
-      for (const k of keys) {
-        if (f.base === k) score = Math.max(score, 6);
-        else if (f.tokens.includes(k) || f.tokens.join('_').includes(k)) score = Math.max(score, 3);
-        else if (f.base.startsWith(k)) score = Math.max(score, 2);
+    if (keys.length) {
+      for (const f of parsed) {
+        let score = 0;
+        for (const k of keys) {
+          if (f.tokens.length === 1 && f.tokens[0] === k) score = Math.max(score, 6);
+          else if (f.tokens.includes(k)) score = Math.max(score, 3);
+        }
+        if (!score) continue;
+        if (PORTRAIT_DIRS.test(f.lower)) score += 3;
+        else if (GALLERY_DIRS.test(f.lower)) score += 2;
+        if (/(?:^|[/_ ])(?:bg|scene|ev)(?:[/_ \d]|$)/.test(f.lower)) score -= 1;
+        add(f.p, score);
       }
-      if (!score) continue;
-      if (PORTRAIT_DIRS.test(f.lower)) score += 3;
-      if (/(?:^|[/_])(?:bg|cg|scene|ev)(?:[/_\d]|$)/.test(f.lower)) score -= 1;
-      add(f.p, score);
     }
-    for (const s of reg.spritePaths(c.id)) add(s.path, s.side ? 5 : 4);
-    // Fallback: the first image of scenes this character leads, then of any scene they're in.
-    let fallback = 0;
-    for (const sc of scenes) {
-      if (!sc.characters.includes(c.id)) continue;
-      const img = sc.backgrounds[0] ?? sc.images[0];
-      if (img) add(img, (sc.speakers[0] === c.id ? 1 : 0.5) - fallback++ * 0.01);
-      if (fallback >= 8) break;
+    for (const s of reg.spritePaths(c.id)) if (usable(s.path)) add(s.path, s.side ? 5 : 4);
+    // Fallback: a picture from the middle of scenes this character leads (first shots are often empty rooms).
+    {
+      let n = 0;
+      for (const sc of scenes) {
+        if (n >= 6) break;
+        if (!sc.characters.includes(c.id)) continue;
+        const pics = sc.images.filter(usable);
+        if (!pics.length) continue;
+        const lead = sc.speakers.find((id) => id !== protagonist) === c.id;
+        add(pics[Math.floor(pics.length * 0.4)], (lead ? 1 : 0.5) - n++ * 0.01);
+      }
     }
-    const ranked = [...scored.entries()].sort((a, b) => b[1] - a[1]).map(([p]) => p).slice(0, 8);
+    const ranked = [...scored.entries()]
+      .sort((a, b) => b[1] - a[1] || naturalCompare(a[0], b[0]))
+      .map(([p]) => p)
+      .slice(0, 8);
     if (ranked.length) {
       c.portrait = ranked[0];
       c.portraitCandidates = ranked;
       ranked.forEach((p) => referenced.add(p));
     }
   }
+}
+
+// ─── Characters: merging and roles ──────────────────────────────────────────
+
+/**
+ * Speakers with the same display name are one character on screen (games often
+ * define variants such as `mc`, `mct` for thoughts, `mcsc` for a phone screen).
+ * The variant with the most lines keeps its id; scenes are rewritten to use it.
+ */
+function mergeSameNamed(chars: CharacterInfo[], scenes: SceneInfo[]): CharacterInfo[] {
+  const byName = new Map<string, CharacterInfo[]>();
+  for (const c of chars) {
+    const k = c.name.trim().toLowerCase();
+    const g = byName.get(k);
+    if (g) g.push(c);
+    else byName.set(k, [c]);
+  }
+  if (byName.size === chars.length) return chars;
+  const canon = new Map<string, string>();
+  const out: CharacterInfo[] = [];
+  for (const group of byName.values()) {
+    group.sort((a, b) => b.lineCount - a.lineCount || b.sceneCount - a.sceneCount);
+    const head = group[0];
+    if (group.length > 1) {
+      head.aliases = group.slice(1).map((c) => c.id);
+      head.lineCount = group.reduce((n, c) => n + c.lineCount, 0);
+      head.color ??= group.find((c) => c.color)?.color;
+    }
+    for (const c of group) canon.set(c.id, head.id);
+    out.push(head);
+  }
+  const remap = (ids: string[]) => {
+    const r: string[] = [];
+    for (const id of ids) {
+      const c = canon.get(id) ?? id;
+      if (!r.includes(c)) r.push(c);
+    }
+    return r;
+  };
+  const byId = new Map(out.map((c) => [c.id, c]));
+  for (const c of out) c.sceneCount = 0;
+  for (const sc of scenes) {
+    sc.speakers = remap(sc.speakers);
+    sc.characters = remap(sc.characters);
+    for (const d of sc.dialogue) if (d.who) d.who = canon.get(d.who) ?? d.who;
+    for (const id of sc.characters) {
+      const c = byId.get(id);
+      if (c) c.sceneCount++;
+    }
+  }
+  return out;
+}
+
+/** At most this many characters get a card on the Characters screen. */
+const MAX_MAIN_CHARACTERS = 16;
+
+/**
+ * Marks the player character (in most scenes, or a "[name]" speaker in many)
+ * and splits the rest into main and minor characters by how much they speak.
+ * Returns the protagonist's id, if any.
+ */
+function assignRoles(chars: CharacterInfo[], sceneTotal: number): string | null {
+  let protagonist: CharacterInfo | undefined;
+  const top = [...chars].sort((a, b) => b.sceneCount - a.sceneCount)[0];
+  if (top && sceneTotal >= 10 && (top.sceneCount >= sceneTotal * 0.6 || (top.name.includes('[') && top.sceneCount >= sceneTotal * 0.3))) {
+    protagonist = top;
+    top.role = 'protagonist';
+  }
+  const rest = chars.filter((c) => c !== protagonist).sort((a, b) => b.lineCount - a.lineCount);
+  // Small casts: everyone gets a card. Big casts: only those with a real share of the dialogue.
+  const threshold = rest.length > 8 ? (rest[0]?.lineCount ?? 0) * 0.15 : 0;
+  rest.forEach((c, i) => {
+    c.role = i < MAX_MAIN_CHARACTERS && c.lineCount >= threshold ? 'main' : 'minor';
+  });
+  return protagonist?.id ?? null;
 }
 
 // ─── Scenes ─────────────────────────────────────────────────────────────────
@@ -796,11 +932,11 @@ export function buildScenes(files: ScriptFile[], assets: AssetLookup): ScenePars
   }
 
   annotateChoices(programs, scenes);
-  pickPortraits([...charStats.values()].filter((c) => c.sceneCount > 0), scenes, reg, assets, referenced);
+  const merged = mergeSameNamed([...charStats.values()], scenes).filter((c) => c.sceneCount > 0);
+  const protagonist = assignRoles(merged, scenes.length);
+  pickPortraits(merged, scenes, reg, assets, referenced, protagonist);
 
-  const characters = [...charStats.values()]
-    .filter((c) => c.sceneCount > 0)
-    .sort((a, b) => b.sceneCount - a.sceneCount || b.lineCount - a.lineCount || a.name.localeCompare(b.name));
+  const characters = merged.sort((a, b) => b.sceneCount - a.sceneCount || b.lineCount - a.lineCount || a.name.localeCompare(b.name));
 
   return { characters, scenes, labels: labels.size, referenced, programs };
 }

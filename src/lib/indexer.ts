@@ -402,7 +402,7 @@ export async function buildGalleryIndex(files: SourceFile[], hooks: IndexerHooks
   progress({ phase: 'building', done: 1, total: 1 });
 
   const index: GalleryIndex = {
-    schema: 5,
+    schema: 6,
     mode,
     key: cacheKeyFor(files),
     sources,
@@ -425,6 +425,7 @@ export async function buildGalleryIndex(files: SourceFile[], hooks: IndexerHooks
       scripts: scriptDiag.slice(0, MAX_DIAG_SCRIPTS),
       screens: diag.screens,
       replay: diag.replay,
+      code: diag.code,
     },
   };
   return { index, programs };
