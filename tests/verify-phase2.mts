@@ -14,6 +14,7 @@ import { PlayerEngine } from '../src/lib/playerEngine.ts';
 import { findCalls, literalValue, splitTopLevel } from '../src/lib/pyString.ts';
 import { BIG_LABEL_LINES, buildScenes, formatTitle } from '../src/lib/sceneParser.ts';
 import { DiagCollector } from '../src/lib/diagScan.ts';
+import { portraitCrop, subjectBox } from '../src/lib/portraitCrop.ts';
 import { PyClass, PyObject } from '../src/lib/pickle.ts';
 import type { GalleryIndex, SceneInfo, Step } from '../src/types.ts';
 import type { WorkerResponse } from '../src/workers/protocol.ts';
@@ -399,6 +400,29 @@ eq('rpy if/elif/else + menu conditions', JSON.stringify(parseRpy('label a:\n    
   check('diag code: labels and dialogue left out', !code.includes('secret dialogue') && !code.includes('ga_annie1_label'), JSON.stringify(code));
   dc.scanTree('game/script.rpyc', tree);
   eq('diag code: only gallery-ish files', dc.code.length, 1);
+}
+
+// ── Portrait framing ──
+{
+  const W = 192, H = 108;
+  const img = (fill: (x: number, y: number) => [number, number, number, number]) => {
+    const px = new Uint8ClampedArray(W * H * 4);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) px.set(fill(x, y), (y * W + x) * 4);
+    return px;
+  };
+  // Transparent canvas, figure at x 140..169, y 12..107 (full body, far right).
+  const cut = img((x, y) => (x >= 140 && x < 170 && y >= 12 ? [200, 60, 120, 255] : [0, 0, 0, 0]));
+  const box = subjectBox(cut, W, H);
+  eq('subject found on a transparent canvas', box, { x: 140, y: 12, w: 30, h: 96 });
+  const crop = portraitCrop(box, W, H);
+  check('crop is 3:4 around the figure, from the top', Math.abs(crop.w / crop.h - 0.75) < 0.03 && crop.x <= 140 && crop.x + crop.w >= 170 && crop.y <= 12 && crop.y + crop.h < H, JSON.stringify(crop));
+  // Plain black background (an opaque render).
+  const black = img((x, y) => (x >= 20 && x < 60 && y >= 30 ? [240, 200, 180, 255] : [0, 0, 0, 255]));
+  eq('subject found on a plain background', subjectBox(black, W, H), { x: 20, y: 30, w: 40, h: 78 });
+  // A busy scene: no plain background → centred crop of the whole height.
+  const busy = img((x, y) => [(x * 7) % 256, (y * 13) % 256, ((x + y) * 5) % 256, 255]);
+  eq('busy picture has no subject box', subjectBox(busy, W, H), null);
+  eq('busy picture: centred full-height crop', portraitCrop(null, W, H), { x: 56, y: 0, w: 81, h: 108 });
 }
 
 console.log(`${passed} passed, ${failures.length} failed`);

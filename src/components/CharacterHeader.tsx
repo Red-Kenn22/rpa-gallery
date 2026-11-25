@@ -5,7 +5,7 @@ import type { CharacterInfo, GalleryIndex } from '../types';
 import { ChevronLeftIcon, ImageIcon, XIcon } from './Icons';
 
 function Thumb({ index, files, path, className }: { index: GalleryIndex; files: File[] | null; path?: string; className: string }) {
-  const src = useAssetThumbnail(index, path, files, true, 320);
+  const src = useAssetThumbnail(index, path, files, true, 320, 'portrait');
   return src ? (
     <img src={src} alt="" className={`${className} object-cover object-top`} draggable={false} />
   ) : (

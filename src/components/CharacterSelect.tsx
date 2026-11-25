@@ -8,7 +8,7 @@ import { ImageIcon } from './Icons';
 export const MISC_ID = '__misc__';
 
 function Portrait({ index, files, path, active }: { index: GalleryIndex; files: File[] | null; path?: string; active: boolean }) {
-  const src = useAssetThumbnail(index, path, files, active);
+  const src = useAssetThumbnail(index, path, files, active, 480, 'portrait');
   return src ? (
     <img src={src} alt="" className="size-full object-cover object-top" draggable={false} />
   ) : (

@@ -26,7 +26,16 @@ scene_image('images/bg/sunset.webp', (60, 30, 90), (250, 120, 80), 'sunset', fmt
 scene_image('images/cg_kiss.jpg', (120, 40, 80), (240, 150, 170), 'cg kiss', fmt='JPEG')
 scene_image('images/sprites/eileen_happy.png', (30, 30, 30), (60, 60, 60), 'eileen', size=(400, 800))
 scene_image('images/lucy smile.png', (30, 30, 30), (60, 60, 60), 'lucy', size=(400, 800))
-scene_image('images/gallery/lucy.png', (200, 80, 140), (60, 20, 60), 'LUCY', size=(600, 800))
+# Like Eternum's bio renders: a wide transparent canvas with the character standing at the far right.
+def cutout(p, size=(1920, 1080)):
+    w, h = size
+    img = Image.new('RGBA', size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    cx = int(w * 0.8)
+    d.ellipse([cx - 70, 120, cx + 70, 300], fill=(255, 200, 170, 255))   # head
+    d.rectangle([cx - 140, 300, cx + 140, h - 1], fill=(210, 60, 120, 255))  # body
+    img.save(path(p))
+cutout('images/gallery/lucy.png')
 
 def video(p, color, label):
     subprocess.run([

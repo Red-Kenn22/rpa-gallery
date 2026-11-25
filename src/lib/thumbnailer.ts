@@ -9,6 +9,8 @@
  *    and drops requests for cards that scrolled away before their turn.
  */
 
+import { portraitCrop, subjectBox, type Box } from './portraitCrop';
+
 export interface ThumbOptions {
   /** Longest edge of the output, in pixels. */
   maxSize?: number;
@@ -16,9 +18,51 @@ export interface ThumbOptions {
   /** Seek position for videos, in seconds. */
   seek?: number;
   timeoutMs?: number;
+  /** 'portrait': a 3:4 crop framed on the character (see portraitCrop.ts). */
+  crop?: 'none' | 'portrait';
 }
 
-const DEFAULTS: Required<ThumbOptions> = { maxSize: 480, quality: 0.72, seek: 1.5, timeoutMs: 12000 };
+const DEFAULTS: Required<ThumbOptions> = { maxSize: 480, quality: 0.72, seek: 1.5, timeoutMs: 12000, crop: 'none' };
+/** Portrait backgrounds (transparent renders) match the card colour instead of turning black. */
+const PORTRAIT_FILL = '#171717';
+
+/** Finds the subject on a small copy of the image, then draws a 3:4 crop around it. */
+function drawPortrait(source: CanvasImageSource, w: number, h: number, opts: Required<ThumbOptions>): string {
+  if (!w || !h) throw new Error('Media has no dimensions');
+  const a = Math.min(1, 200 / Math.max(w, h));
+  const aw = Math.max(1, Math.round(w * a));
+  const ah = Math.max(1, Math.round(h * a));
+  const probe = document.createElement('canvas');
+  probe.width = aw;
+  probe.height = ah;
+  const pctx = probe.getContext('2d', { willReadFrequently: true });
+  if (!pctx) throw new Error('Canvas unavailable');
+  pctx.drawImage(source, 0, 0, aw, ah);
+  let box: Box | null = null;
+  try {
+    box = subjectBox(pctx.getImageData(0, 0, aw, ah).data, aw, ah);
+  } catch {
+    /* tainted or unreadable: frame the whole picture */
+  }
+  probe.width = probe.height = 0;
+  const src = box ? { x: box.x / a, y: box.y / a, w: box.w / a, h: box.h / a } : null;
+  const crop = portraitCrop(src, w, h);
+  const scale = Math.min(1, opts.maxSize / crop.h);
+  const cw = Math.max(1, Math.round(crop.w * scale));
+  const ch = Math.max(1, Math.round(crop.h * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = cw;
+  canvas.height = ch;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Canvas unavailable');
+  ctx.fillStyle = PORTRAIT_FILL;
+  ctx.fillRect(0, 0, cw, ch);
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(source, crop.x, crop.y, crop.w, crop.h, 0, 0, cw, ch);
+  const url = canvas.toDataURL('image/jpeg', opts.quality);
+  canvas.width = canvas.height = 0;
+  return url;
+}
 
 function drawScaled(source: CanvasImageSource, w: number, h: number, opts: Required<ThumbOptions>): string {
   if (!w || !h) throw new Error('Media has no dimensions');
@@ -60,7 +104,7 @@ export async function imageThumbnail(blob: Blob, options: ThumbOptions = {}): Pr
       opts.timeoutMs,
       'Image decode',
     );
-    return drawScaled(img, img.naturalWidth, img.naturalHeight, opts);
+    return opts.crop === 'portrait' ? drawPortrait(img, img.naturalWidth, img.naturalHeight, opts) : drawScaled(img, img.naturalWidth, img.naturalHeight, opts);
   } finally {
     img.removeAttribute('src');
     URL.revokeObjectURL(url);
@@ -100,7 +144,7 @@ export async function videoThumbnail(blob: Blob, options: ThumbOptions = {}): Pr
     }
     // Some WebKit builds report 'seeked' before the frame is painted.
     await new Promise((r) => requestAnimationFrame(() => r(null)));
-    return drawScaled(video, video.videoWidth, video.videoHeight, opts);
+    return opts.crop === 'portrait' ? drawPortrait(video, video.videoWidth, video.videoHeight, opts) : drawScaled(video, video.videoWidth, video.videoHeight, opts);
   } finally {
     video.pause();
     video.removeAttribute('src');

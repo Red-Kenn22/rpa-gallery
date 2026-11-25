@@ -599,6 +599,8 @@ function nameKeys(c: CharacterInfo): string[] {
   return [...keys];
 }
 
+const MAX_PORTRAIT_CHOICES = 12;
+
 function naturalCompare(a: string, b: string): number {
   return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
 }
@@ -655,10 +657,18 @@ function pickPortraits(chars: CharacterInfo[], scenes: SceneInfo[], reg: Registr
         add(pics[Math.floor(pics.length * 0.4)], (lead ? 1 : 0.5) - n++ * 0.01);
       }
     }
-    const ranked = [...scored.entries()]
-      .sort((a, b) => b[1] - a[1] || naturalCompare(a[0], b[0]))
-      .map(([p]) => p)
-      .slice(0, 8);
+    const sorted = [...scored.entries()].sort((a, b) => b[1] - a[1] || naturalCompare(a[0], b[0])).map(([p]) => p);
+    // Variety for the picker: at most 4 choices per folder first, then the rest.
+    const perDir = new Map<string, number>();
+    const varied: string[] = [];
+    const later: string[] = [];
+    for (const p of sorted) {
+      const dir = p.slice(0, p.lastIndexOf('/') + 1);
+      const n = perDir.get(dir) ?? 0;
+      perDir.set(dir, n + 1);
+      (n < 4 ? varied : later).push(p);
+    }
+    const ranked = [...varied, ...later].slice(0, MAX_PORTRAIT_CHOICES);
     if (ranked.length) {
       c.portrait = ranked[0];
       c.portraitCandidates = ranked;

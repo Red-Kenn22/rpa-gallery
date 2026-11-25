@@ -62,6 +62,23 @@ await charCards.first().waitFor({ timeout: 20000 });
 console.log(`  indexing + characters screen: ${Date.now() - t0} ms`);
 check('characters screen first', (await page.locator('[data-all-scenes]').count()) === 1 && (await charCards.count()) === 7, `cards=${await charCards.count()}`);
 await page.waitForFunction(() => ['l', 'e'].every((id) => { const i = document.querySelector(`[data-character="${id}"] img`); return i && i.naturalWidth > 0; }), null, { timeout: 20000 }).catch(() => {});
+{
+  // Lucy's portrait is a wide transparent render with her at the far right: the card must frame her.
+  const framed = await page.evaluate(async () => {
+    const img = document.querySelector('[data-character="l"] img');
+    if (!img) return null;
+    await img.decode();
+    const c = document.createElement('canvas');
+    c.width = img.naturalWidth;
+    c.height = img.naturalHeight;
+    const ctx = c.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+    const at = (fx, fy) => Array.from(ctx.getImageData(Math.floor(c.width * fx), Math.floor(c.height * fy), 1, 1).data);
+    return { w: c.width, h: c.height, centre: at(0.5, 0.6), head: at(0.5, 0.2) };
+  });
+  const pink = (p) => p && p[0] > 150 && p[1] < 120 && p[2] > 80;
+  check('portrait framed on the character (3:4, figure centred)', !!framed && Math.abs(framed.w / framed.h - 0.75) < 0.03 && pink(framed.centre), JSON.stringify(framed));
+}
 check('portraits load (gallery file + sprite)', (await page.locator('[data-character="l"] img').count()) === 1 && (await page.locator('[data-character="e"] img').count()) === 1);
 check('misc tile for scenes without characters', (await page.locator(`[data-character="__misc__"]`).innerText()).includes('2 scenes'));
 await page.screenshot({ path: join(shots, '1b-characters.png') });
