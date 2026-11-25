@@ -87,6 +87,21 @@ await page.locator('[data-all-scenes]').waitFor({ timeout: 5000 }).catch(() => {
 check('Android back returns to characters', (await page.locator('[data-all-scenes]').count()) === 1);
 await page.locator('[data-all-scenes]').click();
 await cards.first().waitFor({ timeout: 20000 });
+
+// diagnostics export (headless Chromium has no share sheet, so it downloads)
+{
+  const btn = page.getByRole('button', { name: 'Export diagnostics' });
+  await page.waitForFunction(() => !document.querySelector('[data-diagnostics] button')?.disabled, null, { timeout: 10000 });
+  const liveBefore = await page.evaluate(() => window.__liveUrls());
+  const [dl] = await Promise.all([page.waitForEvent('download'), btn.click()]);
+  const report = JSON.parse(readFileSync(await dl.path(), 'utf8'));
+  check('diagnostics file name', /^rpa-gallery-diagnostics-.+\.json$/.test(dl.suggestedFilename()), dl.suggestedFilename());
+  check('diagnostics content', report.tool === 'rpa-gallery diagnostics' && report.characters.length === 6 && report.labels.list.length > 10 && report.folders.length > 3, `chars=${report.characters.length} labels=${report.labels.list.length} folders=${report.folders.length}`);
+  check('diagnostics replay targets mapped to scenes', JSON.stringify(report.replay.targets) === JSON.stringify([{ label: 'w1_date', scene: 'w1_date' }, { label: 'beach', scene: 'beach' }]), JSON.stringify(report.replay.targets));
+  check('diagnostics carry no dialogue', !JSON.stringify(report).includes('Your phone buzzes'));
+  check('diagnostics URL freed', await page.waitForFunction((n) => window.__liveUrls() <= n, liveBefore, { timeout: 5000 }).then(() => true, () => false));
+  check('diagnostics status shown', (await page.locator('[data-diagnostics-status]').getAttribute('data-diagnostics-status')) === 'downloaded');
+}
 check('indexed in worker', (await cards.count()) === 8, `cards=${await cards.count()}`);
 check('subtitle', /8 scenes · 6 characters/.test(await page.locator('header').innerText()), await page.locator('header').innerText());
 console.log(`  indexing + first paint: ${Date.now() - t0} ms`);

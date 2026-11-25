@@ -36,6 +36,7 @@ if '--old' in sys.argv:
 sys.path.insert(0, os.path.join(HERE, 'fakerenpy8'))
 from renpy import ast, atl
 from renpy.astsupport import PyExpr
+from renpy.sl2 import slast
 os.makedirs(OUT, exist_ok=True)
 
 def say(line, who, what, translate=True):
@@ -133,6 +134,11 @@ script = flat(
     ast.Label(42, name='main_menu', parameters=None, hide=False, block=say(43, None, 'engine')),
     ast.Label(44, name='empty_label', parameters=None, hide=False, block=[ast.Pass(45)]),
     ast.Screen(46, screen=None),
+    ast.Screen(90, screen=slast.SLScreen(name='replay_gallery', parameters=None, keyword=[('tag', PyExpr('"menu"'))], children=[
+        slast.SLDisplayable(displayable='textbutton', positional=[PyExpr('"Beach date"')], keyword=[('action', PyExpr('Replay("w1_date", scope={"player": "Sam"})'))], children=[]),
+        slast.SLDisplayable(displayable='imagebutton', positional=[], keyword=[('idle', PyExpr('"gallery/lucy.png"')), ('action', PyExpr('Replay("beach")'))], children=[]),
+    ])),
+    ast.Init(91, priority=0, block=[ast.Python(91, hide=False, store='store', code=ast.PyCode('g = Gallery()\ng.button("beach")\ng.unlock_image("bg beach")', 91))]),
 )
 
 tl = [ast.TranslateBlock(1, language='french', block=[ast.Label(2, name='start', parameters=None, hide=False, block=say(3, 'e', 'Bonjour'))])]

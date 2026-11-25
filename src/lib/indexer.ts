@@ -9,12 +9,13 @@
  * a time, and their ASTs are discarded as soon as they've been converted.
  */
 
-import type { AssetRef, GalleryIndex, IndexProgress, ScenePrograms, SourceInfo } from '../types';
+import type { AssetRef, GalleryIndex, IndexDiagnostics, IndexProgress, ScenePrograms, SourceInfo } from '../types';
 import { AstWalker } from './astWalker';
 import { cacheKeyFor } from './cacheKey';
 import { buildFolderGallery } from './folderGallery';
 import { decodeRpyc } from './rpyc';
 import { parseRpy } from './rpyParser';
+import { DiagCollector } from './diagScan';
 import { buildScenes, mediaKind, type AssetLookup } from './sceneParser';
 import type { ScriptFile } from './scriptModel';
 import {
@@ -115,6 +116,36 @@ class AssetTable implements AssetLookup {
   *paths(): Iterable<string> {
     for (const slot of this.byLower.values()) yield slot.path;
   }
+}
+
+const MAX_DIAG_FOLDERS = 600;
+const MAX_DIAG_SCRIPTS = 2000;
+
+/** Per-folder file counts for the diagnostics report (largest folders kept if there are many). */
+function folderSummary(paths: Iterable<string>): Pick<IndexDiagnostics, 'folders' | 'foldersTruncated'> {
+  const byDir = new Map<string, IndexDiagnostics['folders'][number]>();
+  for (const p of paths) {
+    const cut = p.lastIndexOf('/');
+    const dir = cut < 0 ? '' : p.slice(0, cut);
+    let f = byDir.get(dir);
+    if (!f) byDir.set(dir, (f = { dir, images: 0, videos: 0, audio: 0, scripts: 0, other: 0, samples: [] }));
+    const ext = extensionOf(p);
+    const k = mediaKind(p);
+    if (k === 'image') f.images++;
+    else if (k === 'video') f.videos++;
+    else if (k === 'audio') f.audio++;
+    else if (COMPILED_EXT.has(ext) || SOURCE_EXT.has(ext)) f.scripts++;
+    else f.other++;
+    if (f.samples.length < 4) f.samples.push(p.slice(cut + 1));
+  }
+  let folders = [...byDir.values()];
+  const foldersTruncated = folders.length > MAX_DIAG_FOLDERS;
+  if (foldersTruncated) {
+    const total = (f: (typeof folders)[number]) => f.images + f.videos + f.audio + f.scripts + f.other;
+    folders = folders.sort((a, b) => total(b) - total(a)).slice(0, MAX_DIAG_FOLDERS);
+  }
+  folders.sort((a, b) => a.dir.localeCompare(b.dir));
+  return { folders, foldersTruncated };
 }
 
 export async function buildGalleryIndex(files: SourceFile[], hooks: IndexerHooks = {}): Promise<IndexResult> {
@@ -259,6 +290,9 @@ export async function buildGalleryIndex(files: SourceFile[], hooks: IndexerHooks
   const unknown = new Set<string>();
   const textDecoder = new TextDecoder('utf-8');
   let scriptsFailed = 0;
+  const diag = new DiagCollector();
+  const scriptDiag: IndexDiagnostics['scripts'] = [];
+  const errText = (e: unknown) => String((e as Error)?.message ?? e).slice(0, 200);
 
   const parseOne = async (slot: AssetSlot): Promise<ScriptFile> => {
     const blob = files[slot.source].blob;
@@ -268,9 +302,20 @@ export async function buildGalleryIndex(files: SourceFile[], hooks: IndexerHooks
       const walker = new AstWalker();
       const stmts = walker.walk(rpyc.stmts);
       for (const c of walker.unknownClasses) unknown.add(c);
+      try {
+        diag.scanTree(slot.path, rpyc.stmts);
+      } catch {
+        /* diagnostics are best effort */
+      }
       return { path: slot.path, stmts };
     }
-    return { path: slot.path, stmts: parseRpy(textDecoder.decode(bytes)) };
+    const text = textDecoder.decode(bytes);
+    try {
+      diag.scanText(slot.path, text);
+    } catch {
+      /* diagnostics are best effort */
+    }
+    return { path: slot.path, stmts: parseRpy(text) };
   };
 
   for (let n = 0; n < jobs.length; n++) {
@@ -278,11 +323,15 @@ export async function buildGalleryIndex(files: SourceFile[], hooks: IndexerHooks
     const { slot, fallback } = jobs[n];
     progress({ phase: 'parsing-scripts', done: n, total: jobs.length, current: slot.path });
     try {
-      scripts.push(await parseOne(slot));
+      const sf = await parseOne(slot);
+      scripts.push(sf);
+      scriptDiag.push({ path: slot.path, how: COMPILED_EXT.has(extensionOf(slot.path)) ? 'rpyc' : 'rpy', stmts: sf.stmts.length });
     } catch (e) {
       if (fallback) {
         try {
-          scripts.push(await parseOne(fallback));
+          const sf = await parseOne(fallback);
+          scripts.push(sf);
+          scriptDiag.push({ path: fallback.path, how: 'fallback', stmts: sf.stmts.length, error: errText(e) });
           warn(`${slot.path}: unreadable (${(e as Error).message ?? e}); used ${fallback.path} instead`);
           continue;
         } catch {
@@ -290,6 +339,7 @@ export async function buildGalleryIndex(files: SourceFile[], hooks: IndexerHooks
         }
       }
       scriptsFailed++;
+      scriptDiag.push({ path: slot.path, how: 'failed', stmts: 0, error: errText(e) });
       warn(`${slot.path}: ${(e as Error).message ?? e}`);
     }
   }
@@ -352,7 +402,7 @@ export async function buildGalleryIndex(files: SourceFile[], hooks: IndexerHooks
   progress({ phase: 'building', done: 1, total: 1 });
 
   const index: GalleryIndex = {
-    schema: 4,
+    schema: 5,
     mode,
     key: cacheKeyFor(files),
     sources,
@@ -370,6 +420,12 @@ export async function buildGalleryIndex(files: SourceFile[], hooks: IndexerHooks
       millis: Date.now() - t0,
     },
     warnings,
+    diag: {
+      ...folderSummary(table.paths()),
+      scripts: scriptDiag.slice(0, MAX_DIAG_SCRIPTS),
+      screens: diag.screens,
+      replay: diag.replay,
+    },
   };
   return { index, programs };
 }

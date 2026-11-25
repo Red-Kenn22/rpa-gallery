@@ -91,8 +91,21 @@ export interface IndexStats {
   millis: number;
 }
 
+/** Facts gathered while indexing, for the "Export diagnostics" report. */
+export interface IndexDiagnostics {
+  /** Every folder in the selection with file counts by kind and a few sample names. */
+  folders: { dir: string; images: number; videos: number; audio: number; scripts: number; other: number; samples: string[] }[];
+  /** True when `folders` was cut down to the largest folders. */
+  foldersTruncated: boolean;
+  scripts: { path: string; how: 'rpyc' | 'rpy' | 'fallback' | 'failed'; stmts: number; error?: string }[];
+  /** Screens defined in the scripts. */
+  screens: { name: string; file: string }[];
+  /** Script lines mentioning Replay(...), call_replay or Gallery code (for a replay-gallery view). */
+  replay: { file: string; screen?: string; text: string }[];
+}
+
 export interface GalleryIndex {
-  schema: 4;
+  schema: 5;
   /**
    * 'scripts' – scenes come from the game's labels.
    * 'folders' – no scripts were found; scenes are the archive's folders and
@@ -108,6 +121,7 @@ export interface GalleryIndex {
   assets: Record<string, AssetRef>;
   stats: IndexStats;
   warnings: string[];
+  diag?: IndexDiagnostics;
 }
 
 export type IndexPhase = 'reading-index' | 'parsing-scripts' | 'building';

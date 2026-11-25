@@ -130,6 +130,16 @@ eq('portrait: fallback to a scene image', chars.j?.portrait, 'images/bg beach.pn
 check('portrait candidates include the sprite for Lucy', !!chars.l?.portraitCandidates?.includes('images/lucy smile.png'));
 check('portraits are in the asset table', !!index.assets['images/gallery/lucy.png'] && !!index.assets['images/sprites/eileen_happy.png']);
 
+// ── diagnostics collected while indexing ──
+{
+  const d = index.diag!;
+  check('diag: folders summarised', !!d && d.folders.some((f) => f.dir === 'images/gallery' && f.images === 1 && f.samples.includes('lucy.png')), JSON.stringify(d?.folders.map((f) => f.dir)));
+  check('diag: every script listed', d.scripts.length === index.stats.scriptsFound && d.scripts.every((x) => x.how !== 'failed'), JSON.stringify(d.scripts));
+  check('diag: replay screen found', d.screens.some((x) => x.name === 'replay_gallery'), JSON.stringify(d.screens));
+  check('diag: Replay actions found inside the screen', d.replay.filter((r) => r.screen === 'replay_gallery' && r.text.startsWith('Replay(')).length === 2, JSON.stringify(d.replay));
+  check('diag: Gallery code found', d.replay.some((r) => r.text.includes('unlock_image("bg beach")')), JSON.stringify(d.replay));
+}
+
 // ── Ren'Py 6 file: literal speaker merges into e, 3-tuple imspec ──
 eq('old rpyc backgrounds', scene('chapter_two').backgrounds, ['images/bg beach.png']);
 eq('old rpyc speakers', scene('chapter_two').speakers, ['e', 'j']);

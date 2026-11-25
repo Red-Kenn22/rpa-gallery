@@ -2,6 +2,7 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } f
 import { CharacterFilterBar, SortBar, type SortMode } from './components/CharacterFilterBar';
 import { CharacterHeader } from './components/CharacterHeader';
 import { CharacterSelect, MISC_ID } from './components/CharacterSelect';
+import { DiagnosticsButton } from './components/DiagnosticsButton';
 import { DropOverlay } from './components/DropOverlay';
 import { FilePickerButton } from './components/FilePickerButton';
 import { Header } from './components/Header';
@@ -300,6 +301,7 @@ export default function App() {
               </p>
             </div>
           )}
+          <DiagnosticsButton index={index} programs={programs} filesAttached={!!files} />
           <p className="mt-3 text-center text-[11px] text-neutral-400">
             {index.stats.scriptsParsed} scripts · {index.stats.archiveEntries.toLocaleString()} archive files · indexed in{' '}
             {index.stats.millis < 1000 ? `${index.stats.millis} ms` : `${(index.stats.millis / 1000).toFixed(1)} s`}
