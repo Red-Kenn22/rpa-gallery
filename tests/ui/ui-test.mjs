@@ -348,9 +348,10 @@ const menuText = await player.innerText();
 check('menu shows the question', (await player.locator('[data-question]').innerText()).includes('Your phone buzzes.'));
 check('three choices', (await player.locator('[data-choice]').count()) === 3);
 const choiceTexts = await player.locator('[data-choice]').allInnerTexts();
-check('park: rejoins + change + checked later', choiceTexts[0].includes('Rejoins after 1 line') && choiceTexts[0].includes('Eileen love +1') && choiceTexts[0].includes('Eileen love is checked in W 1 Night'), choiceTexts[0]);
-check('cafe: requirement, new image, changes', choiceTexts[1].includes('requires affection >= 5') && choiceTexts[1].includes('Rejoins after 1 image') && choiceTexts[1].includes('1 new image') && choiceTexts[1].includes('Lucy love +2') && choiceTexts[1].includes('add_points("lucy", 1)'), choiceTexts[1]);
-check('go home: continues to another scene', choiceTexts[2].includes('Continues: W 1 Night'), choiceTexts[2]);
+check('park: verdict first, then who it affects and where it is checked', choiceTexts[0].includes('Changes what happens later') && choiceTexts[0].includes('Eileen love +1') && choiceTexts[0].includes('Eileen love is checked in W 1 Night') && choiceTexts[0].includes('1 line'), choiceTexts[0]);
+check('cafe: plain-language requirement, new image, named stat changes', choiceTexts[1].includes('Only if Affection ≥ 5') && choiceTexts[1].includes('images only') && choiceTexts[1].includes('1 new image') && choiceTexts[1].includes('Lucy love +2') && choiceTexts[1].includes('Lucy points +1'), choiceTexts[1]);
+check('go home: leads to another scene', choiceTexts[2].includes('Leads to a different scene: W 1 Night'), choiceTexts[2]);
+check('every choice leads with a verdict', (await player.locator('[data-choice] [data-verdict]').count()) === 3);
 await player.getByRole('button', { name: 'Player settings' }).click();
 await player.locator('[data-settings-menu]').getByRole('button', { name: 'Choice hints' }).click();
 check('choice hints can be turned off', (await player.locator('[data-choice-info]').count()) === 0);
@@ -410,7 +411,7 @@ check('next scene switches the music track', a3.music?.playing === true && a3.mu
 check('sound setting remembered', (await player.locator('[data-sound="on"]').count()) === 1);
 await tap();
 const branchTexts = await player.locator('[data-branch]').allInnerTexts();
-check('if picker explains what it depends on', branchTexts[0]?.includes('eileen_love >= 1') && branchTexts[0]?.includes('Eileen love: +1 by choosing “Park” in W 1 Date'), JSON.stringify(branchTexts));
+check('if picker explains what it depends on', branchTexts[0]?.includes('If Eileen love ≥ 1') && branchTexts[0]?.includes('eileen_love >= 1') && branchTexts[0]?.includes('Eileen love: +1 by choosing “Park” in W 1 Date'), JSON.stringify(branchTexts));
 await page.screenshot({ path: join(shots, '13-player-branch.png') });
 await player.getByLabel('Close player').click();
 await player.waitFor({ state: 'detached' });
@@ -420,6 +421,35 @@ await page.getByRole('dialog').waitFor({ state: 'detached' });
 await page.waitForTimeout(300);
 const liveAfterPlayer = await page.evaluate(() => window.__liveUrls());
 check('player revokes its object URLs', liveAfterPlayer === 0, `live=${liveAfterPlayer}`);
+
+// Auto-play: moves on by itself (after the voice line), stops at the menu
+await page.locator('[data-scene="w1_date"]').click();
+await page.getByRole('dialog').getByRole('button', { name: /Play scene/ }).click();
+await player.waitFor();
+check('auto-play is off to start with', (await player.locator('[data-auto="off"]').count()) === 1);
+for (let i = 0; i < 3; i++) await player.locator('[data-auto-speed]').click();
+check('speed chip cycles to 3×', (await player.locator('[data-auto-speed]').getAttribute('data-auto-speed')) === '3');
+await player.getByRole('button', { name: 'Auto-play', exact: true }).click();
+check('auto-play shows its progress bar', (await player.locator('[data-auto-progress]').count()) === 1);
+await page.waitForFunction(() => document.querySelector('[data-player] [data-say]')?.textContent !== 'Where should we go?', null, { timeout: 8000 }).catch(() => {});
+check('auto-play moves on without a tap', (await sayText()) !== 'Where should we go?', String(await sayText()));
+await player.locator('[data-choice]').first().waitFor({ timeout: 8000 }).catch(() => {});
+await page.waitForTimeout(1200);
+check('auto-play waits at the menu', (await player.locator('[data-choice]').count()) === 3);
+await page.screenshot({ path: join(shots, '10b-player-menu-summary.png') });
+check('menu summary compares the options', (await player.locator('[data-menu-summary]').count()) <= 1);
+await player.locator('[data-choice]').nth(0).click();
+await page.waitForFunction(() => !document.querySelector('[data-player] [data-choice]'), null, { timeout: 3000 }).catch(() => {});
+const afterChoice = await sayText();
+await page.waitForFunction((t) => document.querySelector('[data-player] [data-say]')?.textContent !== t, afterChoice, { timeout: 8000 }).catch(() => {});
+check('auto-play carries on after a choice', (await sayText()) !== afterChoice, `${afterChoice} → ${await sayText()}`);
+await tapLeftEdge();
+check('going back stops auto-play', (await player.locator('[data-auto="off"]').count()) === 1);
+check('speed remembered', await page.evaluate(() => localStorage.getItem('rpa.autoSpeed')) === '3');
+await page.evaluate(() => localStorage.setItem('rpa.autoSpeed', '1'));
+await player.getByLabel('Close player').click();
+await player.waitFor({ state: 'detached' });
+await page.keyboard.press('Escape');
 
 // Looping Movie background + cutscene + Android back closes the player
 await page.locator('[data-scene="start"]').click();

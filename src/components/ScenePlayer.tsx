@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useMediaUrls } from '../hooks/useMediaUrls';
+import { AUTO_SPEEDS, useAutoPlay } from '../hooks/useAutoPlay';
 import { usePlayerAudio } from '../hooks/usePlayerAudio';
+import { conditionText, makeCharMatcher, menuSummary } from '../lib/choiceText';
 import { formatDuration, normalizeHex } from '../lib/format';
 import { mediaKind } from '../lib/media';
 import { PlayerEngine, type Layer } from '../lib/playerEngine';
 import type { GalleryIndex, ScenePrograms, SceneInfo } from '../types';
-import { ChevronLeftIcon, DownloadIcon, EyeOffIcon, ForkNextIcon, ForkPrevIcon, ImageIcon, ListIcon, MoreIcon, SoundOffIcon, SoundOnIcon, XIcon } from './Icons';
+import { ChevronLeftIcon, DownloadIcon, EyeOffIcon, ForkNextIcon, ForkPrevIcon, ImageIcon, ListIcon, MoreIcon, PauseIcon, PlayIcon, SoundOffIcon, SoundOnIcon, XIcon } from './Icons';
 import { ChoiceDetails } from './player/ChoiceDetails';
 import { HistoryPanel } from './player/HistoryPanel';
 import { Scrubber } from './player/Scrubber';
@@ -139,7 +141,7 @@ export function ScenePlayer({
   const engineRef = useRef<PlayerEngine | null>(null);
   if (!engineRef.current) engineRef.current = new PlayerEngine(programs, scene.labels, { autoBranch, replay });
   const engine = engineRef.current;
-  const [, setTick] = useState(0);
+  const [tick, setTick] = useState(0);
   const refresh = () => setTick((t) => t + 1);
   const [choicesVersion, setChoicesVersion] = useState(0);
   const [showLog, setShowLog] = useState(false);
@@ -191,6 +193,40 @@ export function ScenePlayer({
     setChoiceHints(next);
     try {
       localStorage.setItem('rpa.choiceHints', next ? 'on' : 'off');
+    } catch {
+      /* storage unavailable */
+    }
+  };
+  // Auto-play: on/off lasts for this visit (so "Continue" keeps going); the speed is remembered.
+  const [auto, setAutoState] = useState(() => {
+    try {
+      return sessionStorage.getItem('rpa.auto') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const setAuto = (on: boolean) => {
+    setAutoState(on);
+    try {
+      sessionStorage.setItem('rpa.auto', on ? '1' : '0');
+    } catch {
+      /* storage unavailable */
+    }
+  };
+  const [autoSpeed, setAutoSpeed] = useState(() => {
+    try {
+      const n = parseFloat(localStorage.getItem('rpa.autoSpeed') ?? '');
+      return (AUTO_SPEEDS as readonly number[]).includes(n) ? n : 1;
+    } catch {
+      return 1;
+    }
+  });
+  const cycleSpeed = () => {
+    const i = (AUTO_SPEEDS as readonly number[]).indexOf(autoSpeed);
+    const next = AUTO_SPEEDS[(i + 1) % AUTO_SPEEDS.length];
+    setAutoSpeed(next);
+    try {
+      localStorage.setItem('rpa.autoSpeed', String(next));
     } catch {
       /* storage unavailable */
     }
@@ -269,6 +305,13 @@ export function ScenePlayer({
     refresh();
   }, [engine]);
   const back = useCallback(() => {
+    // Going back to re-read: stop auto-play so it doesn't run straight on.
+    setAutoState(false);
+    try {
+      sessionStorage.setItem('rpa.auto', '0');
+    } catch {
+      /* storage unavailable */
+    }
     engine.back();
     refresh();
   }, [engine]);
@@ -283,6 +326,25 @@ export function ScenePlayer({
   };
   const prevFork = [...timeline.forks].reverse().find((f) => f.i < position);
   const nextFork = timeline.forks.find((f) => f.i > position);
+
+  const autoDelay = useAutoPlay({
+    enabled: auto,
+    paused: menusOpen || showLog,
+    speed: autoSpeed,
+    view: v,
+    stopKey: tick,
+    voiceBusy: () => {
+      if (!soundOn) return false;
+      const el = audioBox.current?.querySelector<HTMLAudioElement>('audio[data-channel="voice"]');
+      return !!el && !el.paused && !el.ended;
+    },
+    ready: () => [v.bg?.img, ...v.layers.map((l) => l.img)].every((p) => !p || !!media.url(p) || media.failed(p)),
+    onAdvance: advance,
+  });
+  const match = useMemo(
+    () => makeCharMatcher(index.characters.map((c) => ({ ...c, color: c.color ?? programs.speakers[c.id]?.color }))),
+    [index, programs],
+  );
 
   useEffect(() => {
     if (!backHint) return;
@@ -540,6 +602,25 @@ export function ScenePlayer({
           </button>
         </div>
         <div className="mt-1 flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setAuto(!auto)}
+            className={`grid size-8 shrink-0 place-items-center rounded-full ${auto ? 'bg-white text-neutral-950' : 'bg-black/40 text-white'}`}
+            aria-label={auto ? 'Stop auto-play' : 'Auto-play'}
+            aria-pressed={auto}
+            data-auto={auto ? 'on' : 'off'}
+          >
+            {auto ? <PauseIcon width={14} height={14} /> : <PlayIcon width={14} height={14} />}
+          </button>
+          <button
+            type="button"
+            onClick={cycleSpeed}
+            className="h-8 shrink-0 rounded-full bg-black/40 px-2 text-[12px] font-semibold text-white tabular-nums"
+            aria-label={`Auto-play speed ${autoSpeed}×`}
+            data-auto-speed={autoSpeed}
+          >
+            {autoSpeed}×
+          </button>
           <button type="button" onClick={() => prevFork && jump(prevFork.i)} disabled={!prevFork} className="grid size-8 place-items-center rounded-full text-amber-200 disabled:opacity-25" aria-label="Previous choice">
             <ForkPrevIcon width={16} height={16} />
           </button>
@@ -569,6 +650,11 @@ export function ScenePlayer({
             <p className={`text-[17px] leading-relaxed ${v.say.who ? 'text-white' : 'text-white/80 italic'}`} data-say>
               {v.say.what}
             </p>
+            {autoDelay !== null && (
+              <div className="mt-2 h-0.5 overflow-hidden rounded bg-white/10" data-auto-progress>
+                <div key={tick} className="h-full origin-left bg-white/60" style={{ animation: `rpa-auto-fill ${autoDelay}ms linear forwards` }} />
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -587,11 +673,19 @@ export function ScenePlayer({
                 <span className={engine.previousLine.who ? 'text-white' : 'text-white/80 italic'}>{engine.previousLine.what}</span>
               </div>
             )}
+            {choiceHints && (() => {
+              const summary = menuSummary(v.menu, titleForLabel, scene.id);
+              return summary ? <p className="px-1 text-center text-[13px] text-neutral-200" data-menu-summary>{summary}</p> : null;
+            })()}
             {v.menu.map((c, i) => (
               <button key={i} type="button" onClick={() => choose(i)} className="w-full rounded-xl bg-neutral-900/90 px-4 py-3 text-left text-[15px] font-medium text-white ring-1 ring-white/15 active:scale-[0.98]" data-choice>
                 {c.text}
-                {c.cond && <span className="mt-0.5 block font-mono text-[11px] text-neutral-400">requires {c.cond}</span>}
-                {choiceHints && c.info && <ChoiceDetails info={c.info} programs={programs} scene={scene} sceneById={sceneById} titleForLabel={titleForLabel} />}
+                {c.cond && (
+                  <span className="mt-0.5 block text-[12px] text-neutral-400" title={c.cond} data-requires>
+                    Only if {conditionText(c.cond, match)}
+                  </span>
+                )}
+                {choiceHints && c.info && <ChoiceDetails info={c.info} programs={programs} scene={scene} sceneById={sceneById} titleForLabel={titleForLabel} match={match} />}
               </button>
             ))}
           </div>
@@ -601,11 +695,12 @@ export function ScenePlayer({
       {/* If-branch picker */}
       {v.branch && (
         <div className="absolute inset-0 flex flex-col items-center overflow-y-auto bg-black/65 px-5 pt-[calc(6rem+env(safe-area-inset-top))] pb-8" onClick={stop} onPointerDown={stop} onPointerUp={stop}>
-          <p className="mb-2.5 text-center text-xs text-neutral-300">The game checks its state here. Which way should it go?</p>
+          <p className="mb-2.5 text-center text-xs text-neutral-300">The game checks what you chose earlier. Which way should it go?</p>
           {v.branch.map((b, i) => (
             <button key={i} type="button" onClick={() => choose(i)} className="mb-2.5 w-full max-w-lg rounded-xl bg-neutral-900/90 px-4 py-2.5 text-left ring-1 ring-sky-400/20 active:scale-[0.98]" data-branch>
-              <span className="block font-mono text-[13px] text-sky-200">{b.cond === 'True' ? 'otherwise' : b.cond}</span>
-              {choiceHints && b.info && <ChoiceDetails info={b.info} programs={programs} scene={scene} sceneById={sceneById} titleForLabel={titleForLabel} />}
+              <span className="block text-[14px] font-medium text-sky-100">{b.cond === 'True' ? 'Otherwise' : `If ${conditionText(b.cond, match)}`}</span>
+              {b.cond !== 'True' && <span className="block font-mono text-[11px] text-neutral-500">{b.cond}</span>}
+              {choiceHints && b.info && <ChoiceDetails info={b.info} programs={programs} scene={scene} sceneById={sceneById} titleForLabel={titleForLabel} match={match} branch />}
             </button>
           ))}
           <button type="button" onClick={() => { toggleAutoBranch(); choose(0); }} className="mt-1 text-xs text-neutral-400 underline underline-offset-2">

@@ -5,8 +5,10 @@
  * files themselves. No images, audio or dialogue are included.
  */
 import type { GalleryIndex, ScenePrograms, Step } from '../types';
+import { conditionVars } from './consequences';
 
 const MAX_LABELS = 4000;
+const MAX_VARIABLES = 400;
 const MAX_UNRESOLVED = 300;
 
 type LabelSummary = {
@@ -43,6 +45,57 @@ function summarizeLabel(name: string, file: string, steps: Step[], next: string 
     }
   }
   return s;
+}
+
+/** Story variables: how often each is changed by choices and checked by conditions (names and values only). */
+function summarizeVariables(programs: ScenePrograms) {
+  type V = { name: string; sets: number; inChoices: number; checks: number; ops: string[]; checkedAs: string[] };
+  const vars = new Map<string, V>();
+  const get = (name: string) => {
+    let v = vars.get(name);
+    if (!v) vars.set(name, (v = { name, sets: 0, inChoices: 0, checks: 0, ops: [], checkedAs: [] }));
+    return v;
+  };
+  const calls = new Map<string, { fn: string; uses: number; samples: string[] }>();
+  for (const lp of Object.values(programs.labels)) {
+    lp.steps.forEach((st, pc) => {
+      if (st.t === 'set') {
+        // A change within a few steps of a menu choice's start counts as "set by a choice".
+        const near = lp.steps.slice(Math.max(0, pc - 40), pc).some((p) => p.t === 'menu');
+        for (const c of st.changes) {
+          if (c.op === 'call') {
+            const fn = /^([\w.]+)\s*\(/.exec(c.val)?.[1] ?? c.val.slice(0, 40);
+            const e = calls.get(fn) ?? { fn, uses: 0, samples: [] };
+            e.uses++;
+            if (e.samples.length < 3 && !e.samples.includes(c.val)) e.samples.push(c.val.slice(0, 80));
+            calls.set(fn, e);
+            continue;
+          }
+          const v = get(c.v);
+          v.sets++;
+          if (near) v.inChoices++;
+          const op = `${c.op} ${c.val}`.slice(0, 40);
+          if (v.ops.length < 4 && !v.ops.includes(op)) v.ops.push(op);
+        }
+      } else if (st.t === 'menu' || st.t === 'branch') {
+        const conds = st.t === 'menu' ? st.choices.map((c) => c.cond ?? '') : st.options.map((o) => o.cond);
+        for (const cond of conds) {
+          for (const name of conditionVars(cond)) {
+            const v = get(name);
+            v.checks++;
+            if (v.checkedAs.length < 3 && !v.checkedAs.includes(cond)) v.checkedAs.push(cond.slice(0, 80));
+          }
+        }
+      }
+    });
+  }
+  const list = [...vars.values()].sort((a, b) => b.sets + b.checks - (a.sets + a.checks));
+  return {
+    total: list.length,
+    truncated: list.length > MAX_VARIABLES,
+    list: list.slice(0, MAX_VARIABLES),
+    calls: [...calls.values()].sort((a, b) => b.uses - a.uses).slice(0, 60),
+  };
 }
 
 function readCustomPortraits(key: string): Record<string, string> {
@@ -124,6 +177,7 @@ export function buildDiagnostics(index: GalleryIndex, programs: ScenePrograms | 
       thumbnail: s.thumbnail?.path ?? null,
     })),
     labels: { total: programs ? Object.keys(programs.labels).length : null, truncated: !!programs && Object.keys(programs.labels).length > MAX_LABELS, list: labels },
+    variables: programs ? summarizeVariables(programs) : null,
     unresolvedImages: [...unresolved].sort((a, b) => b[1] - a[1]).slice(0, MAX_UNRESOLVED).map(([name, uses]) => ({ name, uses })),
     stage: programs?.stage ?? null,
     audioChannels: programs?.channels ?? null,

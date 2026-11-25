@@ -17,6 +17,9 @@ import { BIG_LABEL_LINES, buildScenes, formatTitle } from '../src/lib/sceneParse
 import { DiagCollector } from '../src/lib/diagScan.ts';
 import { portraitCrop, subjectBox } from '../src/lib/portraitCrop.ts';
 import { PyClass, PyObject } from '../src/lib/pickle.ts';
+import { changeChip, choiceVerdict, conditionText, makeCharMatcher, menuSummary } from '../src/lib/choiceText.ts';
+import { autoDelayMs } from '../src/lib/autoPlay.ts';
+import type { ChoiceInfo } from '../src/types.ts';
 import type { GalleryIndex, SceneInfo, Step } from '../src/types.ts';
 import type { WorkerResponse } from '../src/workers/protocol.ts';
 
@@ -451,6 +454,46 @@ eq('rpy if/elif/else + menu conditions', JSON.stringify(parseRpy('label a:\n    
   const normal = new PlayerEngine(progs, ['ga']);
   normal.advance();
   eq('normal play continues past end_replay', normal.view.say?.what, 'after the replay');
+}
+
+// ── Plain-language consequences ──
+{
+  const m = makeCharMatcher([{ id: 'a', name: 'Annie', color: '#f0a' }, { id: 'nancy', name: 'Nancy Bell' }, { id: 'mc', name: '[mc]' }]);
+  eq('stat owner: annie_love', m('annie_love')?.who.name + '|' + m('annie_love')?.stat, 'Annie|love');
+  eq('stat owner: love["annie"]', m('love["annie"]')?.stat, 'love');
+  eq('stat owner: joined annielove', m('annielove')?.stat, 'love');
+  eq('stat owner: points_nancy', m('store.points_nancy')?.who.name, 'Nancy Bell');
+  eq('stat owner: unrelated variable', m('beach_trip'), null);
+  eq('stat owner: no false match inside words', m('annieversary_done'), null);
+  eq('change chip: owner, colour, sign', changeChip({ v: 'annie_love', op: '+=', val: '2' }, m), { text: 'Annie love +2', color: '#f0a' });
+  eq('change chip: flag on', changeChip({ v: 'dalia_route', op: '=', val: 'True' }, m).text, 'Turns on: Dalia route');
+  eq('change chip: game function', changeChip({ v: '', op: 'call', val: 'add_points("annie", 1)' }, m).text, 'Annie points +1');
+  eq('change chip: unknown call stays as written', changeChip({ v: '', op: 'call', val: 'renpy.notify("hi")' }, m).text, 'renpy.notify("hi")');
+  eq('condition: plain words', conditionText('store.annie_love >= 3 and not dalia_route', m), 'Annie love ≥ 3 and not Dalia route');
+  eq('condition: == True / == False', conditionText('met_luna == True or nova_path == False', m), 'Met luna or not Nova path');
+  eq('condition: strings and calls kept', conditionText('route == "annie" and len(x) > 2', m), 'Route = "annie" and len(X) > 2');
+  const base: ChoiceInfo = { dest: { k: 'rejoin' }, lines: 3, secs: 10, images: 0, uniqueImages: 0, videos: 0, chars: [], changes: [], usedIn: [] };
+  const lasting: ChoiceInfo = { ...base, changes: [{ v: 'annie_love', op: '+=', val: '1' }], usedIn: [{ v: 'annie_love', scenes: ['s2', 's3'], total: 5 }] };
+  const t = (l: string) => (l === 'other' ? 'Other Scene' : undefined);
+  eq('verdict: nothing', choiceVerdict(base, t).k, 'none');
+  eq('verdict: if-branch with nothing lasting', choiceVerdict(base, t, undefined, true).text, 'Small difference · rejoins after 3 lines');
+  eq('verdict: lasting counts scenes', choiceVerdict(lasting, t).text, 'Changes what happens later · 5 scenes check this');
+  eq('verdict: leaves', choiceVerdict({ ...base, dest: { k: 'leaves', label: 'other' } }, t).text, 'Leads to a different scene: Other Scene');
+  eq('verdict: changes nobody checks', choiceVerdict({ ...base, changes: [{ v: 'x', op: '+=', val: '1' }] }, t).k, 'untracked');
+  eq('summary: all flavour', menuSummary([{ text: 'A', info: base }, { text: 'B', info: base }], t), 'None of these has a lasting effect. Pick whichever you want to see.');
+  eq('summary: one matters', menuSummary([{ text: 'Kiss her', info: lasting }, { text: 'Leave', info: base }], t), 'Only “Kiss her” has lasting effects.');
+  eq('summary: unknown info says nothing', menuSummary([{ text: 'A', info: base }, { text: 'B' }], t), null);
+}
+
+// ── Auto-play timing ──
+{
+  const none = { say: null, menu: null, branch: null, ended: null, video: null };
+  const line = { ...none, say: { who: null, what: 'x'.repeat(100) } };
+  eq('auto: reading time at 1×', autoDelayMs(line, 1), 6200);
+  eq('auto: 2× halves it', autoDelayMs(line, 2), 3100);
+  eq('auto: image beat', autoDelayMs(none, 1), 2500);
+  eq('auto: waits at menus', autoDelayMs({ ...none, menu: [] }, 1), null);
+  eq('auto: cutscenes advance themselves', autoDelayMs({ ...none, video: { img: 'a.webm', name: 'a' } }, 1), null);
 }
 
 console.log(`${passed} passed, ${failures.length} failed`);
