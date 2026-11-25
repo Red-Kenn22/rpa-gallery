@@ -78,7 +78,7 @@ export function handlesFor(files: File[]): FileSystemFileHandle[] | null {
   return out.length ? out : null;
 }
 
-export type ReopenResult = { files: File[] } | { error: 'denied' | 'missing' | 'unavailable'; name?: string };
+export type ReopenResult = { files: File[] } | { error: 'denied' | 'missing' | 'unavailable'; name?: string; detail: string };
 
 /**
  * Reads remembered files again. Call from a tap: Chrome may ask the user to
@@ -88,18 +88,26 @@ export async function filesFromHandles(handles: FileSystemFileHandle[]): Promise
   const files: File[] = [];
   for (const raw of handles) {
     const h = raw as PermissionedHandle;
+    let step = 'request';
     try {
-      let perm: PermissionState = h.queryPermission ? await h.queryPermission({ mode: 'read' }) : 'granted';
-      if (perm !== 'granted' && h.requestPermission) perm = await h.requestPermission({ mode: 'read' });
-      if (perm !== 'granted') return { error: 'denied', name: h.name };
+      // Ask first, with nothing awaited before it: Chrome only shows the prompt straight after a tap.
+      // (requestPermission answers 'granted' at once, without a prompt, when access is already allowed.)
+      const perm: PermissionState = h.requestPermission
+        ? await h.requestPermission({ mode: 'read' })
+        : h.queryPermission
+          ? await h.queryPermission({ mode: 'read' })
+          : 'granted';
+      if (perm !== 'granted') return { error: 'denied', name: h.name, detail: `permission ${perm}` };
+      step = 'read';
       const f = await h.getFile();
       handleOf.set(f, h);
       files.push(f);
     } catch (e) {
-      const name = (e as Error)?.name;
-      if (name === 'NotAllowedError' || name === 'SecurityError') return { error: 'denied', name: h.name };
-      if (name === 'NotFoundError' || name === 'NotReadableError') return { error: 'missing', name: h.name };
-      return { error: 'unavailable', name: h.name };
+      const err = e as Error;
+      const detail = `${step}: ${err?.name ?? 'Error'}${err?.message ? ` – ${err.message}` : ''}`.slice(0, 200);
+      if (err?.name === 'NotAllowedError' || err?.name === 'SecurityError') return { error: 'denied', name: h.name, detail };
+      if (err?.name === 'NotFoundError' || err?.name === 'NotReadableError') return { error: 'missing', name: h.name, detail };
+      return { error: 'unavailable', name: h.name, detail };
     }
   }
   return { files };

@@ -486,6 +486,21 @@ check('drop overlay hides when the drag leaves', (await page.locator('[data-drop
   await page.screenshot({ path: join(shots, '9-remembered.png') });
   await page.keyboard.press('Escape');
 
+  // Chrome refuses access (as on Android without a prompt): reason shown, Try again asks afresh.
+  await page.goto(url);
+  await page.evaluate(() => {
+    const real = FileSystemHandle.prototype.requestPermission;
+    window.__restorePermission = () => (FileSystemHandle.prototype.requestPermission = real);
+    FileSystemHandle.prototype.requestPermission = async () => 'denied';
+  });
+  await page.locator('[data-remembered]').click();
+  await page.locator('[data-reopen-retry]').waitFor({ timeout: 10000 }).catch(() => {});
+  check('refused access explained with Chrome\'s answer', ((await page.locator('[data-reopen-note]').getAttribute('data-reopen-note')) ?? '').includes("scripts.rpa wasn't allowed") && (await page.locator('[data-reopen-detail]').innerText()).includes('permission denied'));
+  await page.evaluate(() => window.__restorePermission());
+  await page.locator('[data-reopen-retry]').click();
+  await page.locator('[data-reopen-note]').waitFor({ state: 'detached', timeout: 10000 }).catch(() => {});
+  check('Try again reopens with files', (await page.getByText('Opened from the cache').count()) === 0 && (await page.locator('[data-reopen-note]').count()) === 0);
+
   // The archive moved away: fall back to the cached scenes with a clear note.
   await page.evaluate(async () => (await navigator.storage.getDirectory()).removeEntry('images.rpa'));
   await page.goto(url);

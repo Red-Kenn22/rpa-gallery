@@ -158,6 +158,24 @@ export async function getHandles(indexKey: string): Promise<FileSystemFileHandle
   return Array.isArray(v) && v.length ? v : null;
 }
 
+/** Every remembered set of handles, by index key (preloaded so a tap can ask for access at once). */
+export async function getAllHandles(): Promise<Map<string, FileSystemFileHandle[]>> {
+  const out = new Map<string, FileSystemFileHandle[]>();
+  const db = await openDb();
+  if (!db) return out;
+  try {
+    const tx = db.transaction(HANDLES, 'readonly');
+    const store = tx.objectStore(HANDLES);
+    const [keys, values] = await Promise.all([done(store.getAllKeys()), done(store.getAll())]);
+    keys.forEach((k, i) => {
+      if (Array.isArray(values[i]) && values[i].length) out.set(String(k), values[i]);
+    });
+  } catch (e) {
+    console.warn('[cache]', e);
+  }
+  return out;
+}
+
 export async function forgetHandles(indexKey: string): Promise<void> {
   await withStore(HANDLES, 'readwrite', (s) => s.delete(indexKey));
 }
