@@ -87,10 +87,33 @@ check('portraits load (gallery file + sprite)', (await page.locator('[data-chara
 check('misc tile for scenes without characters', (await page.locator(`[data-character="__misc__"]`).innerText()).includes('2 scenes'));
 await page.screenshot({ path: join(shots, '1b-characters.png') });
 
+// the game's own replay gallery
+check('gallery tile on the characters screen', (await page.locator('[data-gallery-tile]').innerText()).includes('3 replays'));
+await page.locator('[data-gallery-tile]').click();
+await page.locator('[data-gallery]').waitFor();
+const replays = page.locator('[data-replay]');
+check('gallery lists the replays', (await replays.count()) === 3 && (await replays.first().innerText()).includes('Beach Day'));
+check('gallery filter uses the game names', (await page.locator('[data-gallery-group]').allInnerTexts()).map((t) => t.replace(/\s+/g, ' ')).join('|') === 'Eileen 1|Lucy 2');
+await page.locator('[data-gallery-group="eileen"]').click();
+check('gallery filter', (await replays.count()) === 1 && (await replays.first().getAttribute('data-replay')) === 'w1_date_park');
+await page.waitForFunction(() => { const i = document.querySelector('[data-replay="w1_date_park"] img'); return i && i.naturalWidth > 0; }, null, { timeout: 15000 }).catch(() => {});
+check('gallery thumbnail from the game', (await page.locator('[data-replay="w1_date_park"] img').count()) === 1);
+await page.screenshot({ path: join(shots, '1d-gallery.png') });
+await replays.first().click();
+await page.locator('[data-player]').waitFor({ timeout: 10000 });
+check('replay plays from its own label', (await page.locator('[data-player]').innerText()).includes('Park Walk'));
+await page.goBack();
+await page.locator('[data-player]').waitFor({ state: 'detached' });
+check('back from a replay returns to the gallery', (await page.locator('[data-gallery]').count()) === 1);
+await page.evaluate(() => localStorage.removeItem('rpa.backHint')); // the player's first-run hint is checked later
+await page.getByLabel('Back to characters').click();
+await page.locator('[data-all-scenes]').waitFor();
+
 // character page, back button, Android back
 await page.locator('[data-character="l"]').click();
 await cards.first().waitFor();
 check('character page lists their scenes', (await cards.count()) === 2 && (await page.locator('[data-character-header]').innerText()).includes('Lucy'));
+check("character page shows their gallery replays", (await page.locator('[data-replay-strip] [data-replay]').count()) === 2);
 await page.screenshot({ path: join(shots, '1c-character-page.png') });
 await page.getByRole('button', { name: 'Change portrait' }).click();
 await page.locator('[data-portrait-picker]').waitFor();

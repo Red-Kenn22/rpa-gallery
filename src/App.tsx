@@ -11,6 +11,7 @@ import { IndexingProgress } from './components/IndexingProgress';
 import { SceneGrid } from './components/SceneGrid';
 import { ScenePlayer } from './components/ScenePlayer';
 import { ScenePreviewModal } from './components/ScenePreviewModal';
+import { ReplayGalleryView, ReplayStrip } from './components/ReplayGallery';
 import { MediaNotice, ScriptsNotice } from './components/ScriptsNotice';
 import { UpdateToast } from './components/UpdateToast';
 import { Welcome } from './components/Welcome';
@@ -18,7 +19,7 @@ import { useArchive } from './hooks/useArchive';
 import { usePortraits } from './hooks/usePortraits';
 import { getHandles, putHandles } from './lib/cache';
 import { filesFromHandles, handlesFor } from './lib/fileHandles';
-import type { CharacterInfo, GalleryIndex, SceneInfo } from './types';
+import type { CharacterInfo, GalleryIndex, ReplayInfo, SceneInfo } from './types';
 
 /** Tiny labels (a line or two, no video): navigation stubs, puzzle steps, resets. */
 const isShortScene = (s: SceneInfo) => s.dialogueCount <= 1 && s.videos.length === 0;
@@ -50,7 +51,7 @@ export default function App() {
   const index = state.status === 'ready' ? state.index : null;
   const files = state.status === 'ready' ? state.files : null;
   const programs = state.status === 'ready' ? state.programs : null;
-  const [view, setView] = useState<'characters' | 'scenes'>('characters');
+  const [view, setView] = useState<'characters' | 'scenes' | 'gallery'>('characters');
   /** Whether a history entry exists for "inside a character page" (Back returns to Characters). */
   const viewEntry = useRef(false);
   const viewRef = useRef(view);
@@ -156,6 +157,14 @@ export default function App() {
     }
     window.scrollTo({ top: 0 });
   }, []);
+  const openGallery = useCallback(() => {
+    setView('gallery');
+    if (!viewEntry.current) {
+      viewEntry.current = true;
+      pushOverlay();
+    }
+    window.scrollTo({ top: 0 });
+  }, []);
   const backToCharacters = useCallback(() => {
     setView('characters');
     setCharacter(null);
@@ -175,7 +184,7 @@ export default function App() {
       pushed.current = Math.max(0, pushed.current - 1);
       if (playSceneRef.current) setPlayScene(null);
       else if (openSceneRef.current) setOpenScene(null);
-      else if (viewEntry.current && viewRef.current === 'scenes') {
+      else if (viewEntry.current && viewRef.current !== 'characters') {
         viewEntry.current = false;
         setView('characters');
         setCharacter(null);
@@ -236,6 +245,28 @@ export default function App() {
 
   // Typing a search on the Characters screen shows matching scenes instead.
   const showCharacters = charactersFirst(index) && view === 'characters' && !deferredQuery.trim();
+  const showGallery = !!index?.gallery && view === 'gallery' && !deferredQuery.trim();
+
+  /** Replays play from their label until the game's renpy.end_replay(). */
+  const replayLabels = useMemo(() => new Set(index?.gallery?.replays.map((r) => r.label) ?? []), [index]);
+  const replayScene = useCallback(
+    (r: ReplayInfo): SceneInfo => {
+      const base = r.scene ? index?.scenes.find((s) => s.id === r.scene) : undefined;
+      const thumbnail = r.thumb ? { path: r.thumb, kind: 'image' as const } : (base?.thumbnail ?? null);
+      if (base) return { ...base, id: r.label, title: r.title, labels: [r.label, ...base.labels.filter((l) => l !== r.label)], thumbnail };
+      return { id: r.label, labels: [r.label], durationSec: 0, title: r.title, file: '', line: 0, characters: r.chars, speakers: [], backgrounds: [], images: [], videos: [], thumbnail, dialogue: [], dialogueCount: 0 };
+    },
+    [index],
+  );
+  const playReplay = useCallback(
+    (r: ReplayInfo) => {
+      const scene = replayScene(r);
+      // Straight into the player when it can play; otherwise the preview explains what's missing.
+      if (programs && files) startPlayer(scene);
+      else showScene(scene);
+    },
+    [replayScene, programs, files, startPlayer, showScene],
+  );
 
   const clearFilters = useCallback(() => {
     setQuery('');
@@ -285,8 +316,10 @@ export default function App() {
           )}
           {index.mode === 'folders' && files && <ScriptsNotice index={index} onAddFiles={addFiles} />}
           {index.mode === 'scripts' && files && index.stats.images + index.stats.videos === 0 && <MediaNotice index={index} onAddFiles={addFiles} />}
-          {showCharacters ? (
-            <CharacterSelect index={index} files={files} characters={index.characters} portraitOf={portraitOf} onPick={pickCharacter} />
+          {showGallery && index.gallery ? (
+            <ReplayGalleryView index={index} files={files} gallery={index.gallery} onBack={backToCharacters} onPlay={playReplay} />
+          ) : showCharacters ? (
+            <CharacterSelect index={index} files={files} characters={index.characters} portraitOf={portraitOf} onPick={pickCharacter} onGallery={index.gallery ? openGallery : undefined} />
           ) : (
           <>
           {charactersFirst(index) && (
@@ -300,6 +333,9 @@ export default function App() {
               onBack={backToCharacters}
               onSetPortrait={(path) => character && setPortrait(character, path)}
             />
+          )}
+          {index.gallery && character && character !== MISC_ID && !query.trim() && (
+            <ReplayStrip index={index} files={files} gallery={index.gallery} charId={character} onPlay={playReplay} />
           )}
           {index.characters.length > 0 && (
             <CharacterFilterBar characters={index.characters.filter((c) => c.role !== 'minor' || c.id === character)} selected={character === MISC_ID ? null : character} onSelect={setCharacter} total={index.scenes.length} />
@@ -406,6 +442,7 @@ export default function App() {
           programs={programs}
           files={files}
           sceneForLabel={sceneForLabel}
+          replay={replayLabels.has(playScene.id)}
           onSetPortrait={setPortraitFor}
           onClose={closePlayer}
           onContinue={(next) => {

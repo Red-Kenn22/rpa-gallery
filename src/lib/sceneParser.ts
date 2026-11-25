@@ -8,11 +8,12 @@
  *   programs    – every label compiled for the scene player
  */
 
-import type { CharacterInfo, DialogueLine, SceneInfo, ScenePrograms } from '../types';
+import type { CharacterInfo, DialogueLine, ReplayGallery, SceneInfo, ScenePrograms } from '../types';
 import { isVisual, mediaKind } from './media';
 import { annotateChoices } from './consequences';
 import { compileLabel, programPaths } from './program';
-import { callAt, findCalls, findStringLiterals, literalValue, stripTextTags } from './pyString';
+import { callAt, findCalls, findStringLiterals, literalValue, matchBracket, stripTextTags } from './pyString';
+import { buildReplayGallery, type ReplayButton } from './replayGallery';
 import { childBlocks, type ScriptFile, type Stmt } from './scriptModel';
 
 export { mediaKind } from './media';
@@ -775,9 +776,30 @@ export interface SceneParseResult {
   labels: number;
   referenced: Set<string>;
   programs: ScenePrograms;
+  gallery?: ReplayGallery;
 }
 
-export function buildScenes(files: ScriptFile[], assets: AssetLookup): SceneParseResult {
+/** Literal values assigned in the scripts (`define x = …`, `x = […]` in python), for the replay gallery. */
+function collectLiterals(files: ScriptFile[]): string[] {
+  const out: string[] = [];
+  for (const f of files) {
+    forEachStmt(f.stmts, (s) => {
+      if (s.k === 'define') {
+        const t = s.source.trim();
+        if (t[0] === '[' || t[0] === '{' || t[0] === '(') out.push(t);
+      } else if (s.k === 'python' && /=\s*[[{(]/.test(s.source)) {
+        for (const m of s.source.matchAll(/(?:^|\n)[ \t]*(?:define[ \t]+)?[\w.]+[ \t]*=[ \t]*(?=[[{(])/g)) {
+          const open = (m.index ?? 0) + m[0].length;
+          const close = matchBracket(s.source, open);
+          if (close > open) out.push(s.source.slice(open, close + 1));
+        }
+      }
+    });
+  }
+  return out;
+}
+
+export function buildScenes(files: ScriptFile[], assets: AssetLookup, extras: { replayButtons?: ReplayButton[] } = {}): SceneParseResult {
   const reg = new Registry(assets);
   for (const f of files) reg.collect(f.stmts);
   reg.finish();
@@ -946,7 +968,34 @@ export function buildScenes(files: ScriptFile[], assets: AssetLookup): ScenePars
   const protagonist = assignRoles(merged, scenes.length);
   pickPortraits(merged, scenes, reg, assets, referenced, protagonist);
 
+  // ── The game's own replay gallery ──
+  const sceneOfLabel = new Map<string, string>();
+  for (const sc of scenes) for (const l of sc.labels) if (!sceneOfLabel.has(l)) sceneOfLabel.set(l, sc.id);
+  const imagesByBase = new Map<string, string[]>();
+  for (const p of assets.paths()) {
+    if (mediaKind(p) !== 'image') continue;
+    const base = p.toLowerCase().replace(/^.*\//, '').replace(/\.[a-z0-9]+$/, '');
+    const list = imagesByBase.get(base);
+    if (list) list.push(p);
+    else imagesByBase.set(base, [p]);
+  }
+  const gallery = buildReplayGallery({
+    literals: collectLiterals(files),
+    buttons: extras.replayButtons ?? [],
+    labels: new Set(labels.keys()),
+    sceneOf: (l) => sceneOfLabel.get(l) ?? null,
+    resolveImage: (d) => {
+      const t = d.trim();
+      const path = isVisual(t) ? reg.resolveFile(t) : reg.resolveImage(t.split(/\s+/));
+      return path && mediaKind(path) === 'image' ? path : null;
+    },
+    imagesByBase,
+    characters: merged,
+    formatTitle,
+  });
+  for (const r of gallery?.replays ?? []) if (r.thumb) referenced.add(r.thumb);
+
   const characters = merged.sort((a, b) => b.sceneCount - a.sceneCount || b.lineCount - a.lineCount || a.name.localeCompare(b.name));
 
-  return { characters, scenes, labels: labels.size, referenced, programs };
+  return { characters, scenes, labels: labels.size, referenced, programs, gallery };
 }

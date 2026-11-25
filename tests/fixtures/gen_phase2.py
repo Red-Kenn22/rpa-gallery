@@ -138,6 +138,9 @@ script = flat(
         slast.SLDisplayable(displayable='textbutton', positional=[PyExpr('"Beach date"')], keyword=[('action', PyExpr('Replay("w1_date", scope={"player": "Sam"})'))], children=[]),
         slast.SLDisplayable(displayable='imagebutton', positional=[], keyword=[('idle', PyExpr('"gallery/lucy.png"')), ('action', PyExpr('Replay("beach")'))], children=[]),
     ])),
+    ast.Init(92, priority=0, block=[ast.Define(92, store='store', varname='replays', operator='=', code=ast.PyCode('[\n    ["bg beach", "lucy", "beach", _("Beach Day"), ["sunny"], ["lucy"], ["mc"]],\n    ["cg kiss", "cg_kiss", "w1_date_park", _("Park Walk"), ["romance"], ["eileen", "lucy"], ["mc"]],\n]', 92, 'eval'))]),
+    ast.Init(93, priority=0, block=[ast.Define(93, store='store', varname='girl_names', operator='=', code=ast.PyCode('{"all": _("All"), "eileen": "Eileen", "lucy": _("Lucy")}', 93, 'eval'))]),
+    ast.Init(94, priority=0, block=[ast.Define(94, store='store', varname='tag_names', operator='=', code=ast.PyCode('{"sunny": _("Sunny"), "romance": _("Romance")}', 94, 'eval'))]),
     ast.Init(91, priority=0, block=[ast.Python(91, hide=False, store='store', code=ast.PyCode('g = Gallery()\ng.button("beach")\ng.unlock_image("bg beach")', 91))]),
 )
 

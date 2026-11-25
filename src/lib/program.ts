@@ -71,6 +71,7 @@ function pythonSteps(source: string, reg: Registry): Step[] {
   const setStep: Step[] = changes.length ? [{ t: 'set', changes }] : [];
   if (!/renpy\.|Movie/.test(source)) return setStep;
   const events: PyEvent[] = [];
+  for (const m of source.matchAll(/renpy\.end_replay\s*\(/g)) events.push({ at: m.index ?? 0, step: { t: 'replayEnd' } });
   for (const c of findCalls(source, /renpy\.(?:music\.(?:play|queue|stop)|sound\.(?:play|queue|stop)|play|voice)/)) {
     const kw = c.args.keyword;
     const defCh = c.callee.startsWith('renpy.music') ? 'music' : c.callee === 'renpy.voice' ? 'voice' : 'sound';

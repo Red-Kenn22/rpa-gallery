@@ -61,6 +61,8 @@ export interface State {
 export interface EngineOptions {
   /** Take the first branch of every `if` instead of asking. */
   autoBranch?: boolean;
+  /** Playing a gallery replay: `renpy.end_replay()` ends playback. */
+  replay?: boolean;
 }
 
 export interface Timeline {
@@ -362,6 +364,10 @@ export class PlayerEngine {
           if (st.stack.length >= MAX_CALL_DEPTH || !this.programs.labels[s.label]) break;
           st.stack.push({ label: s.label, pc: 0 });
           v.label = s.label;
+          break;
+        case 'replayEnd':
+          if (this.options.replay) return this.end('end');
+          frame.pc++;
           break;
         case 'return':
           st.stack.pop();

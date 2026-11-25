@@ -4,6 +4,10 @@
  */
 import { PyObject } from './pickle';
 import type { IndexDiagnostics } from '../types';
+import { literalValue } from './pyString';
+import type { ReplayButton } from './replayGallery';
+
+const REPLAY_LABEL = /\bReplay\s*\(\s*(u?["'][^"']+["'])/;
 
 const REPLAY_RE = /\b(?:Replay\s*\(|call_replay\b|Gallery\s*\(|\.unlock_image\s*\(|\.unlock\s*\(|\.condition\s*\()/;
 const MAX_REPLAY = 400;
@@ -23,6 +27,28 @@ export class DiagCollector {
   readonly screens: IndexDiagnostics['screens'] = [];
   readonly replay: IndexDiagnostics['replay'] = [];
   readonly code: NonNullable<IndexDiagnostics['code']> = [];
+  /** Screen buttons whose action is Replay("literal label"). */
+  readonly buttons: ReplayButton[] = [];
+
+  /** An SLDisplayable with `action Replay("x")`: its label, image and text. */
+  private replayButton(node: PyObject) {
+    const kw = node.get('keyword');
+    if (!Array.isArray(kw)) return;
+    const pairs = kw.filter((p): p is [string, string] => Array.isArray(p) && typeof p[0] === 'string' && typeof p[1] === 'string');
+    const action = pairs.find(([k]) => k === 'action')?.[1];
+    const m = action ? REPLAY_LABEL.exec(action) : null;
+    const label = m ? literalValue(m[1]) : null;
+    if (!label) return;
+    const imgExpr = pairs.find(([k]) => k === 'idle' || k === 'ground' || k === 'auto')?.[1];
+    const pos = node.get('positional');
+    const first = Array.isArray(pos) && typeof pos[0] === 'string' ? literalValue(pos[0]) : null;
+    const image = imgExpr ? literalValue(imgExpr) : node.get('displayable') === 'imagebutton' ? first : null;
+    const text = node.get('displayable') === 'textbutton' ? first : null;
+    const b: ReplayButton = { label };
+    if (image) b.image = image.replace('%s', 'idle');
+    if (text) b.text = text;
+    this.buttons.push(b);
+  }
   private seen = new Set<string>();
 
   private addLines(file: string, text: string, screen?: string) {
@@ -63,6 +89,7 @@ export class DiagCollector {
         for (const x of v) stack.push([x, screen]);
       } else if (v instanceof PyObject) {
         let inner = screen;
+        if (v.cls.name === 'SLDisplayable') this.replayButton(v);
         if (v.cls.name === 'SLScreen') {
           const name = v.get('name');
           if (typeof name === 'string') {
@@ -136,6 +163,18 @@ export class DiagCollector {
         continue;
       }
       this.addLines(file, line, screen);
+      const rm = REPLAY_LABEL.exec(line);
+      const label = rm ? literalValue(rm[1]) : null;
+      if (label) {
+        const img = /\b(?:idle|ground|auto)\s+(u?["'][^"']+["'])/.exec(line);
+        const txt = /^textbutton\s+(?:_\()?(u?["'][^"']+["'])/.exec(line);
+        const b: ReplayButton = { label };
+        const image = img ? literalValue(img[1]) : null;
+        if (image) b.image = image.replace('%s', 'idle');
+        const t = txt ? literalValue(txt[1]) : null;
+        if (t) b.text = t;
+        this.buttons.push(b);
+      }
     }
   }
 }

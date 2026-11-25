@@ -114,10 +114,13 @@ export function ScenePlayer({
   files,
   sceneForLabel,
   onSetPortrait,
+  replay = false,
   onClose,
   onContinue,
 }: {
   onSetPortrait?: (charId: string, path: string) => void;
+  /** A gallery replay: ends at the game's renpy.end_replay(). */
+  replay?: boolean;
   scene: SceneInfo;
   index: GalleryIndex;
   programs: ScenePrograms;
@@ -134,7 +137,7 @@ export function ScenePlayer({
     }
   });
   const engineRef = useRef<PlayerEngine | null>(null);
-  if (!engineRef.current) engineRef.current = new PlayerEngine(programs, scene.labels, { autoBranch });
+  if (!engineRef.current) engineRef.current = new PlayerEngine(programs, scene.labels, { autoBranch, replay });
   const engine = engineRef.current;
   const [, setTick] = useState(0);
   const refresh = () => setTick((t) => t + 1);
@@ -637,7 +640,7 @@ export function ScenePlayer({
           <button
             type="button"
             onClick={() => {
-              engineRef.current = new PlayerEngine(programs, scene.labels, { autoBranch });
+              engineRef.current = new PlayerEngine(programs, scene.labels, { autoBranch, replay });
               refresh();
             }}
             className="w-full max-w-xs rounded-full px-4 py-2.5 text-sm text-white ring-1 ring-white/25"

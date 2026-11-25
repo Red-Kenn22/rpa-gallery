@@ -110,8 +110,29 @@ export interface IndexDiagnostics {
   code?: { file: string; strings: string[]; truncated: boolean }[];
 }
 
+/** One entry of the game's own replay gallery (Ren'Py `Replay(label)`). */
+export interface ReplayInfo {
+  /** Label the replay starts at. */
+  label: string;
+  title: string;
+  /** Archive path of its gallery thumbnail, if found. */
+  thumb: string | null;
+  /** The game's own grouping keys (e.g. "dalia", "side"), see ReplayGallery.groups. */
+  groups: string[];
+  /** Character ids these groups map to. */
+  chars: string[];
+  /** Scene containing the start label, if any. */
+  scene: string | null;
+}
+
+export interface ReplayGallery {
+  replays: ReplayInfo[];
+  /** Filter groups in the game's order, with display names and matched characters. */
+  groups: { key: string; name: string; char: string | null }[];
+}
+
 export interface GalleryIndex {
-  schema: 7;
+  schema: 8;
   /**
    * 'scripts' – scenes come from the game's labels.
    * 'folders' – no scripts were found; scenes are the archive's folders and
@@ -128,6 +149,8 @@ export interface GalleryIndex {
   stats: IndexStats;
   warnings: string[];
   diag?: IndexDiagnostics;
+  /** The game's replay gallery, when its scripts define one. */
+  gallery?: ReplayGallery;
 }
 
 export type IndexPhase = 'reading-index' | 'parsing-scripts' | 'building';
@@ -166,6 +189,8 @@ export type Step =
   | { t: 'audio'; ch: string; op: 'play' | 'queue' | 'stop'; files: string[]; loop: boolean | null; fade: number }
   /** Variable changes from Python (`$ lucy_love += 1`); no-op for the player, used for choice details. */
   | { t: 'set'; changes: VarChange[] }
+  /** `renpy.end_replay()`: ends a gallery replay (does nothing in normal play). */
+  | { t: 'replayEnd' }
   | { t: 'goto'; to: number }
   | { t: 'jump'; label: string }
   | { t: 'call'; label: string }

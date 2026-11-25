@@ -11,6 +11,7 @@ import { loadAssetBlob } from '../src/lib/archiveClient.ts';
 import { buildGalleryIndex, IndexCancelledError, type SourceFile } from '../src/lib/indexer.ts';
 import { parseRpy } from '../src/lib/rpyParser.ts';
 import { PlayerEngine } from '../src/lib/playerEngine.ts';
+import { parsePyLiteral } from '../src/lib/replayGallery.ts';
 import { findCalls, literalValue, splitTopLevel } from '../src/lib/pyString.ts';
 import { BIG_LABEL_LINES, buildScenes, formatTitle } from '../src/lib/sceneParser.ts';
 import { DiagCollector } from '../src/lib/diagScan.ts';
@@ -423,6 +424,33 @@ eq('rpy if/elif/else + menu conditions', JSON.stringify(parseRpy('label a:\n    
   const busy = img((x, y) => [(x * 7) % 256, (y * 13) % 256, ((x + y) * 5) % 256, 255]);
   eq('busy picture has no subject box', subjectBox(busy, W, H), null);
   eq('busy picture: centred full-height crop', portraitCrop(null, W, H), { x: 56, y: 0, w: 81, h: 108 });
+}
+
+// ── Replay gallery ──
+{
+  const g = index.gallery;
+  check('gallery found', !!g, JSON.stringify(g));
+  eq('gallery: list rows first, then literal screen buttons', g?.replays.map((r) => [r.label, r.title]), [['beach', 'Beach Day'], ['w1_date_park', 'Park Walk'], ['w1_date', 'Beach date']]);
+  eq('gallery: thumbnails prefer the gallery folder', g?.replays.map((r) => r.thumb), ['images/gallery/lucy.png', 'images/cg_kiss.jpg', null]);
+  eq('gallery: groups in the dict order with display names, matched to characters', g?.groups, [{ key: 'eileen', name: 'Eileen', char: 'e' }, { key: 'lucy', name: 'Lucy', char: 'l' }]);
+  eq('gallery: who is in each replay', g?.replays.map((r) => r.chars), [['l'], ['e', 'l'], []]);
+  eq('gallery: replay inside a merged scene knows its scene', g?.replays[1].scene, 'w1_date');
+  check('gallery thumbnails are in the asset table', !!index.assets['images/gallery/lucy.png'] && !!index.assets['images/cg_kiss.jpg']);
+  eq('py literal: nesting, _(), tuples, comments, concatenation', parsePyLiteral('[("a" "b", _(\'c\'), 1, -2.5, None, True), # x\n {"k": [u"v"]},]'), [['ab', { tr: 'c' }, 1, -2.5, null, true], { dict: [['k', ['v']]] }]);
+  eq('py literal: not a literal', parsePyLiteral('[Heart(1, 2)]'), undefined);
+}
+
+// ── Replays end at renpy.end_replay() ──
+{
+  const progs = { schema: 1 as const, stage: null, speakers: {}, channels: {}, labels: {
+    ga: { file: 'a', next: null, steps: [{ t: 'say', who: null, what: 'one' }, { t: 'replayEnd' }, { t: 'say', who: null, what: 'after the replay' }] as Step[] },
+  } };
+  const replay = new PlayerEngine(progs, ['ga'], { replay: true });
+  replay.advance();
+  check('replay ends at end_replay', !!replay.view.ended && replay.view.say?.what !== 'after the replay');
+  const normal = new PlayerEngine(progs, ['ga']);
+  normal.advance();
+  eq('normal play continues past end_replay', normal.view.say?.what, 'after the replay');
 }
 
 console.log(`${passed} passed, ${failures.length} failed`);

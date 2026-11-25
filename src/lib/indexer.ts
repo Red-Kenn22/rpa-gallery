@@ -358,7 +358,7 @@ export async function buildGalleryIndex(files: SourceFile[], hooks: IndexerHooks
     else if (k === 'audio') counts.audio++;
   }
 
-  const built = buildScenes(scripts, table);
+  const built = buildScenes(scripts, table, { replayButtons: diag.buttons });
   let result: { characters: GalleryIndex['characters']; scenes: GalleryIndex['scenes']; labels: number; referenced: Set<string> } = built;
   let programs: ScenePrograms | null = built.programs;
   let mode: GalleryIndex['mode'] = 'scripts';
@@ -402,7 +402,7 @@ export async function buildGalleryIndex(files: SourceFile[], hooks: IndexerHooks
   progress({ phase: 'building', done: 1, total: 1 });
 
   const index: GalleryIndex = {
-    schema: 7,
+    schema: 8,
     mode,
     key: cacheKeyFor(files),
     sources,
@@ -420,6 +420,7 @@ export async function buildGalleryIndex(files: SourceFile[], hooks: IndexerHooks
       millis: Date.now() - t0,
     },
     warnings,
+    ...(mode === 'scripts' && built.gallery ? { gallery: built.gallery } : {}),
     diag: {
       ...folderSummary(table.paths()),
       scripts: scriptDiag.slice(0, MAX_DIAG_SCRIPTS),

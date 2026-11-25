@@ -66,12 +66,15 @@ export function CharacterSelect({
   characters,
   portraitOf,
   onPick,
+  onGallery,
 }: {
   index: GalleryIndex;
   files: File[] | null;
   characters: CharacterInfo[];
   portraitOf: (c: CharacterInfo) => string | undefined;
   onPick: (id: string | null) => void;
+  /** Opens the game's replay gallery (shown when the game has one). */
+  onGallery?: () => void;
 }) {
   const totals = new Map<string, number>();
   for (const s of index.scenes) for (const id of s.characters) totals.set(id, (totals.get(id) ?? 0) + s.durationSec);
@@ -97,6 +100,16 @@ export function CharacterSelect({
             </span>
           </span>
         </button>
+        {onGallery && index.gallery && (
+          <button type="button" onClick={onGallery} className={`${tile} bg-gradient-to-br from-amber-400/20 to-rose-500/25 ring-white/10 hover:ring-white/25`} data-gallery-tile>
+            <span>
+              <span className="block text-lg font-bold">Gallery</span>
+              <span className="mt-1 block text-xs text-neutral-300">
+                {index.gallery.replays.length} replay{index.gallery.replays.length === 1 ? '' : 's'}
+              </span>
+            </span>
+          </button>
+        )}
         {cards.map((c) => (
           <CharacterCard
             key={c.id}
