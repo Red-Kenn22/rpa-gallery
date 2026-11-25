@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { clearCache, deleteCachedIndex, listCachedIndexes, type CachedIndexSummary } from '../lib/cache';
+import { classicPickerPreferred, rememberSupported, setClassicPickerPreferred } from '../lib/fileHandles';
 import { FilePickerButton } from './FilePickerButton';
 import { FolderOpenIcon, TrashIcon } from './Icons';
 
@@ -23,6 +24,7 @@ export function Welcome({
 }) {
   const [recent, setRecent] = useState<CachedIndexSummary[]>([]);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [classic, setClassic] = useState(classicPickerPreferred);
   const refresh = () => {
     void listCachedIndexes().then(setRecent);
   };
@@ -79,9 +81,15 @@ export function Welcome({
           <ul className="divide-y divide-white/5 overflow-hidden rounded-2xl bg-white/[0.04] ring-1 ring-white/5">
             {recent.map((r) => (
               <li key={r.key} className="flex items-center gap-2">
-                <button type="button" className="min-w-0 flex-1 px-4 py-3 text-left transition-colors hover:bg-white/[0.04]" onClick={() => onOpenCached(r.key)}>
+                <button
+                  type="button"
+                  className="min-w-0 flex-1 px-4 py-3 text-left transition-colors hover:bg-white/[0.04]"
+                  onClick={() => onOpenCached(r.key)}
+                  data-remembered={r.remembered ? '' : undefined}
+                >
                   <p className="truncate text-sm font-medium">{r.sources.join(', ')}</p>
                   <p className="text-xs text-neutral-500">
+                    {r.remembered && <span className="mr-1.5 rounded-full bg-emerald-400/15 px-1.5 py-px font-medium text-emerald-300">Files remembered</span>}
                     {r.scenes} scenes{r.characters ? ` · ${r.characters} characters` : ''} · {ago(r.savedAt)}
                   </p>
                 </button>
@@ -96,8 +104,28 @@ export function Welcome({
               </li>
             ))}
           </ul>
-          <p className="mt-2 text-xs text-neutral-500">Opening from here shows scenes and dialogue straight away. Select the files again to play media.</p>
+          <p className="mt-2 text-xs leading-relaxed text-neutral-500">
+            {recent.some((r) => r.remembered)
+              ? 'Games with "Files remembered" open with pictures and sound in one tap. Others show scenes and dialogue; select their files again to play media.'
+              : 'Opening from here shows scenes and dialogue straight away. Select the files again to play media.'}
+          </p>
         </section>
+      )}
+
+      {rememberSupported() && (
+        <p className="mt-8 text-center text-xs leading-relaxed text-neutral-500" data-picker-mode={classic ? 'classic' : 'system'}>
+          {classic ? 'Using the classic file picker (files aren\'t remembered).' : 'Files you open are remembered for next time.'}{' '}
+          <button
+            type="button"
+            className="text-neutral-300 underline underline-offset-2"
+            onClick={() => {
+              setClassicPickerPreferred(!classic);
+              setClassic(!classic);
+            }}
+          >
+            {classic ? 'Remember files' : 'Use the classic picker'}
+          </button>
+        </p>
       )}
     </main>
   );

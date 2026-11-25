@@ -50,6 +50,10 @@ const cardsSettle = (n) => page.waitForFunction((want) => document.querySelector
 
 // ── Welcome ──
 await page.goto(url);
+// The flows below drive the classic <input type=file>; the system picker gets its own section at the end.
+check('picker remembers files by default where supported', (await page.locator('[data-picker-mode="system"]').count()) === 1);
+await page.getByRole('button', { name: 'Use the classic picker' }).click();
+check('classic picker switch', (await page.locator('[data-picker-mode="classic"]').count()) === 1);
 await page.getByText("Browse Ren'Py scenes").waitFor();
 await page.screenshot({ path: join(shots, '1-welcome.png') });
 check('welcome renders', true);
@@ -421,6 +425,51 @@ await page.evaluate(() => {
 });
 await page.locator('[data-drop-overlay]').waitFor({ state: 'detached', timeout: 3000 }).catch(() => {});
 check('drop overlay hides when the drag leaves', (await page.locator('[data-drop-overlay]').count()) === 0);
+
+// ── Remembered files: system picker → one-tap reopen after a reload ──
+{
+  // Serve fixtures to the page, and stand in for the system picker with real handles
+  // from the origin-private file system (they persist in IndexedDB like picked ones).
+  await page.route('**/__fixtures/*', (route) => route.fulfill({ body: readFileSync(join(fixtures, route.request().url().split('/').pop())) }));
+  await page.goto(url);
+  await page.getByRole('button', { name: 'Remember files' }).click();
+  await page.evaluate(() => {
+    window.showOpenFilePicker = async () => {
+      const root = await navigator.storage.getDirectory();
+      const out = [];
+      for (const n of ['scripts.rpa', 'images.rpa']) {
+        const h = await root.getFileHandle(n, { create: true });
+        const w = await h.createWritable();
+        await w.write(await (await fetch(`/__fixtures/${n}`)).blob());
+        await w.close();
+        out.push(h);
+      }
+      return out;
+    };
+  });
+  await page.getByRole('button', { name: 'Open archive files' }).first().click();
+  await page.locator('[data-all-scenes]').waitFor({ timeout: 20000 });
+  await page.getByLabel('Home').click();
+  await page.getByText('Recently opened').waitFor();
+  check('recent list marks remembered files', (await page.locator('[data-remembered]').count()) === 1 && (await page.locator('[data-remembered]').innerText()).includes('Files remembered'));
+
+  await page.reload();
+  await page.locator('[data-remembered]').click();
+  await page.locator('[data-all-scenes]').waitFor({ timeout: 20000 });
+  check('one tap reopens with files (no cache banner)', (await page.getByText('Opened from the cache').count()) === 0);
+  await page.locator('[data-all-scenes]').click();
+  await page.locator('[data-scene="start"]').click();
+  check('remembered files can play', !(await page.getByRole('dialog').getByRole('button', { name: /Play scene/ }).isDisabled()));
+  await page.screenshot({ path: join(shots, '9-remembered.png') });
+  await page.keyboard.press('Escape');
+
+  // The archive moved away: fall back to the cached scenes with a clear note.
+  await page.evaluate(async () => (await navigator.storage.getDirectory()).removeEntry('images.rpa'));
+  await page.goto(url);
+  await page.locator('[data-remembered]').click();
+  await page.locator('[data-reopen-note]').waitFor({ timeout: 10000 }).catch(() => {});
+  check('missing remembered file explained', ((await page.locator('[data-reopen-note]').getAttribute('data-reopen-note')) ?? '').includes('images.rpa has moved or been deleted'));
+}
 
 check('no console errors', errors.length === 0, errors.join(' | ').slice(0, 400));
 

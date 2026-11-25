@@ -87,6 +87,24 @@ export function useArchive() {
     } else setState({ status: 'error', message: 'That archive is no longer in the cache.' });
   }, [loadPrograms]);
 
+  /**
+   * Opens a cached game with files read back from remembered handles. Matches by
+   * name and size (some Android providers report a new modified time on every
+   * read); different files mean the game changed, so they are indexed afresh.
+   */
+  const reopen = useCallback(
+    async (key: string, picked: File[]) => {
+      const cached = await getCachedIndex(key);
+      const ordered = cached ? orderFiles(cached, picked) : null;
+      if (cached && ordered) {
+        jobRef.current?.cancel();
+        setState({ status: 'ready', index: cached, files: ordered, fromCache: true, programs: undefined });
+        loadPrograms(cached);
+      } else await open(picked);
+    },
+    [loadPrograms, open],
+  );
+
   /** Re-attaches files to a cached index. Returns false if they don't match. */
   const attachFiles = useCallback(
     (picked: File[]): boolean => {
@@ -111,5 +129,5 @@ export function useArchive() {
     setState({ status: 'idle' });
   }, []);
 
-  return { state, open, openCached, attachFiles, cancel, close };
+  return { state, open, openCached, reopen, attachFiles, cancel, close };
 }

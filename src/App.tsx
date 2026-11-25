@@ -16,6 +16,8 @@ import { UpdateToast } from './components/UpdateToast';
 import { Welcome } from './components/Welcome';
 import { useArchive } from './hooks/useArchive';
 import { usePortraits } from './hooks/usePortraits';
+import { getHandles, putHandles } from './lib/cache';
+import { filesFromHandles, handlesFor } from './lib/fileHandles';
 import type { CharacterInfo, GalleryIndex, SceneInfo } from './types';
 
 /** Tiny labels (a line or two, no video): navigation stubs, puzzle steps, resets. */
@@ -30,7 +32,9 @@ function gameTitle(index: GalleryIndex): string {
 }
 
 export default function App() {
-  const { state, open, openCached, attachFiles, cancel, close } = useArchive();
+  const { state, open, openCached, reopen, attachFiles, cancel, close } = useArchive();
+  /** Why remembered files couldn't be reopened (shown in the cache banner). */
+  const [reopenNote, setReopenNote] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   // Typing stays responsive on big games: filtering uses the deferred value.
   const deferredQuery = useDeferredValue(query);
@@ -181,6 +185,33 @@ export default function App() {
     return () => window.removeEventListener('popstate', onPop);
   }, []);
 
+  // Files picked through the system picker: remember them for one-tap reopening.
+  useEffect(() => {
+    if (state.status !== 'ready' || !state.files) return;
+    setReopenNote(null);
+    const handles = handlesFor(state.files);
+    if (handles) void putHandles(state.index.key, handles);
+  }, [state]);
+
+  /** Recent list tap: read the remembered files back (Chrome may ask to allow access), else open without them. */
+  const openRecent = useCallback(
+    async (key: string) => {
+      const handles = await getHandles(key);
+      if (!handles) return openCached(key);
+      const r = await filesFromHandles(handles);
+      if ('files' in r) return reopen(key, r.files);
+      await openCached(key);
+      setReopenNote(
+        r.error === 'missing'
+          ? `${r.name ?? 'A file'} has moved or been deleted.`
+          : r.error === 'denied'
+            ? `Access to ${r.name ?? 'the files'} wasn't allowed.`
+            : `Couldn't read ${r.name ?? 'the files'} again.`,
+      );
+    },
+    [openCached, reopen],
+  );
+
   const onFiles = useCallback(
     (picked: File[]) => {
       // Picking files for an archive opened from the cache re-attaches them.
@@ -232,15 +263,17 @@ export default function App() {
         searchPlaceholder={index?.mode === 'folders' ? 'Search folders' : undefined}
       />
 
-      {state.status === 'idle' && <Welcome onFiles={onFiles} onOpenCached={openCached} />}
-      {state.status === 'error' && <Welcome onFiles={onFiles} onOpenCached={openCached} error={state.message} />}
+      {state.status === 'idle' && <Welcome onFiles={onFiles} onOpenCached={openRecent} />}
+      {state.status === 'error' && <Welcome onFiles={onFiles} onOpenCached={openRecent} error={state.message} />}
       {state.status === 'indexing' && <IndexingProgress progress={state.progress} fileNames={state.fileNames} onCancel={cancel} />}
 
       {index && (
         <main className="mx-auto max-w-6xl pr-[max(1rem,env(safe-area-inset-right))] pb-[calc(2rem+env(safe-area-inset-bottom))] pl-[max(1rem,env(safe-area-inset-left))]">
           {!files && (
             <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-200 ring-1 ring-amber-500/20">
-              <p className="min-w-0 flex-1">Opened from the cache. Select the same files to load thumbnails and media.</p>
+              <p className="min-w-0 flex-1" data-reopen-note={reopenNote ?? undefined}>
+                {reopenNote ? `${reopenNote} ` : 'Opened from the cache. '}Select the same files to load thumbnails and media.
+              </p>
               <FilePickerButton
                 onFiles={onFiles}
                 label="Select the archive files again"
